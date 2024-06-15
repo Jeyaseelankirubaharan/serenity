@@ -7,6 +7,10 @@
 
 #pragma once
 
+#if __has_include(<features.h>)
+#    include <features.h>
+#endif
+
 #ifndef USING_AK_GLOBALLY
 #    define USING_AK_GLOBALLY 1
 #endif
@@ -51,6 +55,10 @@
 #    define AK_COMPILER_CLANG
 #elif defined(__GNUC__)
 #    define AK_COMPILER_GCC
+#endif
+
+#if defined(AK_COMPILER_CLANG) && defined(__apple_build_version__)
+#    define AK_COMPILER_APPLE_CLANG
 #endif
 
 #if defined(__GLIBC__)
@@ -119,18 +127,6 @@
 #    define AK_OS_WINDOWS
 #endif
 
-#if defined(__ANDROID__)
-#    define STR(x) __STR(x)
-#    define __STR(x) #x
-#    if __ANDROID_API__ < 30
-#        pragma message "Invalid android API " STR(__ANDROID_API__)
-#        error "Build configuration not tested on configured Android API version"
-#    endif
-#    undef STR
-#    undef __STR
-#    define AK_OS_ANDROID
-#endif
-
 #if defined(__EMSCRIPTEN__)
 #    define AK_OS_EMSCRIPTEN
 #endif
@@ -153,10 +149,6 @@
 #    define VALIDATE_IS_RISCV64()
 #else
 #    define VALIDATE_IS_RISCV64() static_assert(false, "Trying to include riscv64 only header on non riscv64 platform");
-#endif
-
-#if !defined(AK_COMPILER_CLANG)
-#    define AK_HAS_CONDITIONALLY_TRIVIAL
 #endif
 
 // Apple Clang 14.0.3 (shipped in Xcode 14.3) has a bug that causes __builtin_subc{,l,ll}
@@ -186,10 +178,23 @@
 #endif
 #define RETURNS_NONNULL __attribute__((returns_nonnull))
 
+#ifdef NO_SANITIZE_COVERAGE
+#    undef NO_SANITIZE_COVERAGE
+#endif
+#if defined(AK_COMPILER_CLANG)
+#    define NO_SANITIZE_COVERAGE __attribute__((no_sanitize("coverage")))
+#else
+#    define NO_SANITIZE_COVERAGE __attribute__((no_sanitize_coverage))
+#endif
+
 #ifdef NO_SANITIZE_ADDRESS
 #    undef NO_SANITIZE_ADDRESS
 #endif
-#define NO_SANITIZE_ADDRESS __attribute__((no_sanitize_address))
+#if defined(AK_COMPILER_CLANG)
+#    define NO_SANITIZE_ADDRESS __attribute__((no_sanitize("address")))
+#else
+#    define NO_SANITIZE_ADDRESS __attribute__((no_sanitize_address))
+#endif
 
 #ifdef NAKED
 #    undef NAKED

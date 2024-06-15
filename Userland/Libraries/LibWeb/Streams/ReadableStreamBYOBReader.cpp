@@ -8,6 +8,7 @@
 #include <LibJS/Runtime/PromiseCapability.h>
 #include <LibJS/Runtime/TypedArray.h>
 #include <LibWeb/Bindings/Intrinsics.h>
+#include <LibWeb/Bindings/ReadableStreamBYOBReaderPrototype.h>
 #include <LibWeb/Streams/AbstractOperations.h>
 #include <LibWeb/Streams/ReadableStream.h>
 #include <LibWeb/Streams/ReadableStreamBYOBReader.h>
@@ -56,8 +57,7 @@ void ReadableStreamBYOBReader::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     ReadableStreamGenericReaderMixin::visit_edges(visitor);
-    for (auto& request : m_read_into_requests)
-        visitor.visit(request);
+    visitor.visit(m_read_into_requests);
 }
 
 class BYOBReaderReadIntoRequest : public ReadIntoRequest {
@@ -107,7 +107,7 @@ private:
 JS_DEFINE_ALLOCATOR(BYOBReaderReadIntoRequest);
 
 // https://streams.spec.whatwg.org/#byob-reader-read
-WebIDL::ExceptionOr<JS::NonnullGCPtr<JS::Promise>> ReadableStreamBYOBReader::read(JS::Handle<WebIDL::ArrayBufferView>& view)
+JS::NonnullGCPtr<JS::Promise> ReadableStreamBYOBReader::read(JS::Handle<WebIDL::ArrayBufferView>& view)
 {
     auto& realm = this->realm();
 

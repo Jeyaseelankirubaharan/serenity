@@ -295,15 +295,13 @@ public:
                 continue;
             }
 
-            if (identifier_group_name == "arguments"sv) {
-                // NOTE: arguments is a special variable that should not be treated as a candidate to become local
-                continue;
-            }
-
             bool scope_has_declaration = false;
             if (is_top_level() && m_var_names.contains(identifier_group_name))
                 scope_has_declaration = true;
             else if (m_lexical_names.contains(identifier_group_name) || m_function_names.contains(identifier_group_name))
+                scope_has_declaration = true;
+
+            if (m_type == ScopeType::Function && !m_is_arrow_function && identifier_group_name == "arguments"sv)
                 scope_has_declaration = true;
 
             bool hoistable_function_declaration = false;
@@ -435,6 +433,37 @@ public:
         }
     }
 
+    bool uses_this() const { return m_uses_this; }
+    bool uses_this_from_environment() const { return m_uses_this_from_environment; }
+
+    void set_uses_this()
+    {
+        auto const* closest_function_scope = last_function_scope();
+        auto uses_this_from_environment = closest_function_scope && closest_function_scope->m_is_arrow_function;
+        for (auto* scope_ptr = this; scope_ptr; scope_ptr = scope_ptr->m_parent_scope) {
+            if (scope_ptr->m_type == ScopeType::Function) {
+                scope_ptr->m_uses_this = true;
+                if (uses_this_from_environment)
+                    scope_ptr->m_uses_this_from_environment = true;
+            }
+        }
+    }
+
+    void set_uses_new_target()
+    {
+        for (auto* scope_ptr = this; scope_ptr; scope_ptr = scope_ptr->m_parent_scope) {
+            if (scope_ptr->m_type == ScopeType::Function) {
+                scope_ptr->m_uses_this = true;
+                scope_ptr->m_uses_this_from_environment = true;
+            }
+        }
+    }
+
+    void set_is_arrow_function()
+    {
+        m_is_arrow_function = true;
+    }
+
 private:
     void throw_identifier_declared(DeprecatedFlyString const& name, NonnullRefPtr<Declaration const> const& declaration)
     {
@@ -475,6 +504,13 @@ private:
     bool m_contains_direct_call_to_eval { false };
     bool m_contains_await_expression { false };
     bool m_screwed_by_eval_in_scope_chain { false };
+
+    // Function uses this binding from function environment if:
+    // 1. It's an arrow function or establish parent scope for an arrow function
+    // 2. Uses new.target
+    bool m_uses_this_from_environment { false };
+    bool m_uses_this { false };
+    bool m_is_arrow_function { false };
 };
 
 class OperatorPrecedenceTable {
@@ -521,7 +557,7 @@ private:
     };
 
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Operators/Operator_Precedence
-    static constexpr const OperatorPrecedence m_operator_precedence[] = {
+    static constexpr OperatorPrecedence const m_operator_precedence[] = {
         { TokenType::Period, 20 },
         { TokenType::BracketOpen, 20 },
         { TokenType::ParenOpen, 20 },
@@ -977,9 +1013,11 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
 
     Vector<FunctionParameter> parameters;
     i32 function_length = -1;
-    bool contains_direct_call_to_eval = false;
+    FunctionParsingInsights parsing_insights;
+    parsing_insights.might_need_arguments_object = false;
     auto function_body_result = [&]() -> RefPtr<FunctionBody const> {
         ScopePusher function_scope = ScopePusher::function_scope(*this);
+        function_scope.set_is_arrow_function();
 
         if (expect_parens) {
             // We have parens around the function parameters and can re-use the same parsing
@@ -1031,7 +1069,7 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
         if (match(TokenType::CurlyOpen)) {
             // Parse a function body with statements
             consume(TokenType::CurlyOpen);
-            auto body = parse_function_body(parameters, function_kind, contains_direct_call_to_eval);
+            auto body = parse_function_body(parameters, function_kind, parsing_insights);
             consume(TokenType::CurlyClose);
             return body;
         }
@@ -1050,7 +1088,8 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
             return_block->append<ReturnStatement const>({ m_source_code, rule_start.position(), position() }, move(return_expression));
             if (m_state.strict_mode)
                 const_cast<FunctionBody&>(*return_block).set_strict_mode();
-            contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
+            parsing_insights.contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
+            parsing_insights.uses_this_from_environment = m_state.current_scope_pusher->uses_this_from_environment();
             return return_block;
         }
         // Invalid arrow function body
@@ -1082,7 +1121,7 @@ RefPtr<FunctionExpression const> Parser::try_parse_arrow_function_expression(boo
     return create_ast_node<FunctionExpression>(
         { m_source_code, rule_start.position(), position() }, nullptr, move(source_text),
         move(body), move(parameters), function_length, function_kind, body->in_strict_mode(),
-        /* might_need_arguments_object */ false, contains_direct_call_to_eval, move(local_variables_names), /* is_arrow_function */ true);
+        parsing_insights, move(local_variables_names), /* is_arrow_function */ true);
 }
 
 RefPtr<LabelledStatement const> Parser::try_parse_labelled_statement(AllowLabelledFunction allow_function)
@@ -1194,6 +1233,10 @@ RefPtr<MetaProperty const> Parser::try_parse_new_target_expression()
 
     state_rollback_guard.disarm();
     discard_saved_state();
+
+    if (m_state.current_scope_pusher)
+        m_state.current_scope_pusher->set_uses_new_target();
+
     return create_ast_node<MetaProperty>({ m_source_code, rule_start.position(), position() }, MetaProperty::Type::NewTarget);
 }
 
@@ -1571,15 +1614,17 @@ NonnullRefPtr<ClassExpression const> Parser::parse_class_expression(bool expect_
             // return statement here to create the correct completion.
             constructor_body->append(create_ast_node<ReturnStatement>({ m_source_code, rule_start.position(), position() }, move(super_call)));
 
+            FunctionParsingInsights parsing_insights;
             constructor = create_ast_node<FunctionExpression>(
                 { m_source_code, rule_start.position(), position() }, class_name, "",
                 move(constructor_body), Vector { FunctionParameter { move(argument_name), nullptr, true } }, 0, FunctionKind::Normal,
-                /* is_strict_mode */ true, /* might_need_arguments_object */ false, /* contains_direct_call_to_eval */ false, /* local_variables_names */ Vector<DeprecatedFlyString> {});
+                /* is_strict_mode */ true, parsing_insights, /* local_variables_names */ Vector<DeprecatedFlyString> {});
         } else {
+            FunctionParsingInsights parsing_insights;
             constructor = create_ast_node<FunctionExpression>(
                 { m_source_code, rule_start.position(), position() }, class_name, "",
                 move(constructor_body), Vector<FunctionParameter> {}, 0, FunctionKind::Normal,
-                /* is_strict_mode */ true, /* might_need_arguments_object */ false, /* contains_direct_call_to_eval */ false, /* local_variables_names */ Vector<DeprecatedFlyString> {});
+                /* is_strict_mode */ true, parsing_insights, /* local_variables_names */ Vector<DeprecatedFlyString> {});
         }
     }
 
@@ -1639,15 +1684,20 @@ Parser::PrimaryExpressionParseResult Parser::parse_primary_expression()
         }
         return { move(expression) };
     }
-    case TokenType::This:
+    case TokenType::This: {
+        if (m_state.current_scope_pusher)
+            m_state.current_scope_pusher->set_uses_this();
         consume_and_allow_division();
         return { create_ast_node<ThisExpression>({ m_source_code, rule_start.position(), position() }) };
+    }
     case TokenType::Class:
         return { parse_class_expression(false) };
     case TokenType::Super:
         consume();
         if (!m_state.allow_super_property_lookup)
             syntax_error("'super' keyword unexpected here");
+        if (m_state.current_scope_pusher)
+            m_state.current_scope_pusher->set_uses_new_target();
         return { create_ast_node<SuperExpression>({ m_source_code, rule_start.position(), position() }) };
     case TokenType::EscapedKeyword:
         if (match_invalid_escaped_keyword())
@@ -2255,6 +2305,7 @@ NonnullRefPtr<Expression const> Parser::parse_expression(int min_precedence, Ass
         auto& callee = static_ptr_cast<CallExpression const>(expression)->callee();
         if (is<Identifier>(callee) && static_cast<Identifier const&>(callee).string() == "eval"sv) {
             m_state.current_scope_pusher->set_contains_direct_call_to_eval();
+            m_state.current_scope_pusher->set_uses_this();
         }
     }
 
@@ -2716,7 +2767,7 @@ void Parser::parse_statement_list(ScopeNode& output_node, AllowLabelledFunction 
 }
 
 // FunctionBody, https://tc39.es/ecma262/#prod-FunctionBody
-NonnullRefPtr<FunctionBody const> Parser::parse_function_body(Vector<FunctionParameter> const& parameters, FunctionKind function_kind, bool& contains_direct_call_to_eval)
+NonnullRefPtr<FunctionBody const> Parser::parse_function_body(Vector<FunctionParameter> const& parameters, FunctionKind function_kind, FunctionParsingInsights& parsing_insights)
 {
     auto rule_start = push_start();
     auto function_body = create_ast_node<FunctionBody>({ m_source_code, rule_start.position(), position() });
@@ -2791,7 +2842,9 @@ NonnullRefPtr<FunctionBody const> Parser::parse_function_body(Vector<FunctionPar
 
     m_state.strict_mode = previous_strict_mode;
     VERIFY(m_state.current_scope_pusher->type() == ScopePusher::ScopeType::Function);
-    contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
+    parsing_insights.contains_direct_call_to_eval = m_state.current_scope_pusher->contains_direct_call_to_eval();
+    parsing_insights.uses_this_from_environment = m_state.current_scope_pusher->uses_this_from_environment();
+    parsing_insights.uses_this = m_state.current_scope_pusher->uses_this();
     return function_body;
 }
 
@@ -2876,7 +2929,7 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
 
     i32 function_length = -1;
     Vector<FunctionParameter> parameters;
-    bool contains_direct_call_to_eval = false;
+    FunctionParsingInsights parsing_insights;
     auto body = [&] {
         ScopePusher function_scope = ScopePusher::function_scope(*this, name);
 
@@ -2896,7 +2949,7 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
 
         consume(TokenType::CurlyOpen);
 
-        auto body = parse_function_body(parameters, function_kind, contains_direct_call_to_eval);
+        auto body = parse_function_body(parameters, function_kind, parsing_insights);
         return body;
     }();
 
@@ -2911,11 +2964,11 @@ NonnullRefPtr<FunctionNodeType> Parser::parse_function_node(u16 parse_options, O
     auto function_start_offset = rule_start.position().offset;
     auto function_end_offset = position().offset - m_state.current_token.trivia().length();
     auto source_text = ByteString { m_state.lexer.source().substring_view(function_start_offset, function_end_offset - function_start_offset) };
+    parsing_insights.might_need_arguments_object = m_state.function_might_need_arguments_object;
     return create_ast_node<FunctionNodeType>(
         { m_source_code, rule_start.position(), position() },
         name, move(source_text), move(body), move(parameters), function_length,
-        function_kind, has_strict_directive, m_state.function_might_need_arguments_object,
-        contains_direct_call_to_eval,
+        function_kind, has_strict_directive, parsing_insights,
         move(local_variables_names));
 }
 
@@ -5100,7 +5153,7 @@ NonnullRefPtr<Identifier const> Parser::create_identifier_and_register_in_curren
     return id;
 }
 
-Parser Parser::parse_function_body_from_string(ByteString const& body_string, u16 parse_options, Vector<FunctionParameter> const& parameters, FunctionKind kind, bool& contains_direct_call_to_eval)
+Parser Parser::parse_function_body_from_string(ByteString const& body_string, u16 parse_options, Vector<FunctionParameter> const& parameters, FunctionKind kind, FunctionParsingInsights& parsing_insights)
 {
     RefPtr<FunctionBody const> function_body;
 
@@ -5113,7 +5166,7 @@ Parser Parser::parse_function_body_from_string(ByteString const& body_string, u1
             body_parser.m_state.await_expression_is_valid = true;
         if ((parse_options & FunctionNodeParseOptions::IsGeneratorFunction) != 0)
             body_parser.m_state.in_generator_function_context = true;
-        function_body = body_parser.parse_function_body(parameters, kind, contains_direct_call_to_eval);
+        function_body = body_parser.parse_function_body(parameters, kind, parsing_insights);
     }
 
     return body_parser;

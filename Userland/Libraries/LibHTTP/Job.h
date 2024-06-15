@@ -53,8 +53,7 @@ protected:
     Core::BufferedSocketBase* m_socket { nullptr };
     bool m_legacy_connection { false };
     int m_code { -1 };
-    HashMap<ByteString, ByteString, CaseInsensitiveStringTraits> m_headers;
-    Vector<ByteString> m_set_cookie_headers;
+    HTTP::HeaderMap m_headers;
 
     struct ReceivedBuffer {
         ReceivedBuffer(ByteBuffer d)

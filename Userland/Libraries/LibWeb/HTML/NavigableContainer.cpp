@@ -95,7 +95,7 @@ WebIDL::ExceptionOr<void> NavigableContainer::create_new_child_navigable(JS::Saf
     document_state->set_about_base_url(document->about_base_url());
 
     // 7. Let navigable be a new navigable.
-    JS::NonnullGCPtr<Navigable> navigable = *heap().allocate_without_realm<Navigable>();
+    JS::NonnullGCPtr<Navigable> navigable = *heap().allocate_without_realm<Navigable>(page);
 
     // 8. Initialize the navigable navigable given documentState and parentNavigable.
     TRY_OR_THROW_OOM(vm(), navigable->initialize_navigable(document_state, parent_navigable));
@@ -220,11 +220,7 @@ Optional<URL::URL> NavigableContainer::shared_attribute_processing_steps_for_ifr
     // 4. If url matches about:blank and initialInsertion is true, then perform the URL and history update steps given element's content navigable's active document and url.
     if (url_matches_about_blank(url) && initial_insertion) {
         auto& document = *m_content_navigable->active_document();
-
         perform_url_and_history_update_steps(document, url);
-
-        // Spec issue: https://github.com/whatwg/html/issues/10261
-        document.set_ready_to_run_scripts();
     }
 
     // 5. Return url.
@@ -279,7 +275,7 @@ void NavigableContainer::destroy_the_child_navigable()
     // FIXME: 4. Inform the navigation API about child navigable destruction given navigable.
 
     // 5. Destroy a document and its descendants given navigable's active document.
-    navigable->active_document()->destroy_a_document_and_its_descendants([this, navigable] {
+    navigable->active_document()->destroy_a_document_and_its_descendants(JS::create_heap_function(heap(), [this, navigable] {
         // 3. Set container's content navigable to null.
         m_content_navigable = nullptr;
 
@@ -302,7 +298,7 @@ void NavigableContainer::destroy_the_child_navigable()
             // 1. Update for navigable creation/destruction given traversable.
             traversable->update_for_navigable_creation_or_destruction();
         });
-    });
+    }));
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#potentially-delays-the-load-event

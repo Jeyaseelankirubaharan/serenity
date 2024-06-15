@@ -10,6 +10,7 @@
 
 #include <LibJS/Runtime/Date.h>
 #include <LibJS/Runtime/NativeFunction.h>
+#include <LibWeb/Bindings/HTMLInputElementPrototype.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/CSS/StyleValues/IdentifierStyleValue.h>
 #include <LibWeb/CSS/StyleValues/LengthStyleValue.h>
@@ -134,6 +135,7 @@ void HTMLInputElement::set_checked(bool checked, ChangeSource change_source)
     if (parent()) {
         parent()->for_each_child([&](auto& child) {
             child.invalidate_style();
+            return IterationDecision::Continue;
         });
     }
 }
@@ -246,14 +248,20 @@ static void show_the_picker_if_applicable(HTMLInputElement& element)
 
     // 1. If element's relevant global object does not have transient activation, then return.
     auto& global_object = relevant_global_object(element);
-    if (!is<HTML::Window>(global_object) || !static_cast<HTML::Window&>(global_object).has_transient_activation())
+    if (!is<HTML::Window>(global_object))
+        return;
+    auto& relevant_global_object = static_cast<HTML::Window&>(global_object);
+    if (!relevant_global_object.has_transient_activation())
         return;
 
     // 2. If element is not mutable, then return.
     if (!element.is_mutable())
         return;
 
-    // 3. If element's type attribute is in the File Upload state, then run these steps in parallel:
+    // 3. Consume user activation given element's relevant global object.
+    relevant_global_object.consume_user_activation();
+
+    // 4. If element's type attribute is in the File Upload state, then run these steps in parallel:
     if (element.type_state() == HTMLInputElement::TypeAttributeState::FileUpload) {
         // NOTE: These steps cannot be fully implemented here, and must be done in the PageClient when the response comes back from the PageHost
 
@@ -275,7 +283,7 @@ static void show_the_picker_if_applicable(HTMLInputElement& element)
         return;
     }
 
-    // 4. Otherwise, the user agent should show any relevant user interface for selecting a value for element,
+    // 5. Otherwise, the user agent should show any relevant user interface for selecting a value for element,
     //    in the way it normally would when the user interacts with the control. (If no such UI applies to element, then this step does nothing.)
     //    If such a user interface is shown, it must respect the requirements stated in the relevant parts of the specification for how element
     //    behaves given its type attribute state. (For example, various sections describe restrictions on the resulting value string.)
@@ -379,7 +387,7 @@ WebIDL::ExceptionOr<void> HTMLInputElement::run_input_activation_behavior(DOM::E
     return {};
 }
 
-void HTMLInputElement::did_edit_text_node(Badge<BrowsingContext>)
+void HTMLInputElement::did_edit_text_node(Badge<Navigable>)
 {
     // An input element's dirty value flag must be set to true whenever the user interacts with the control in a way that changes the value.
     m_value = value_sanitization_algorithm(m_text_node->data());
@@ -543,8 +551,8 @@ WebIDL::ExceptionOr<void> HTMLInputElement::set_value(String const& value)
                 m_text_node->set_data(m_value);
                 update_placeholder_visibility();
 
-                if (auto* browsing_context = document().browsing_context())
-                    browsing_context->set_cursor_position(DOM::Position::create(realm, *m_text_node, m_text_node->data().bytes().size()));
+                if (auto navigable = document().navigable())
+                    navigable->set_cursor_position(DOM::Position::create(realm, *m_text_node, m_text_node->data().bytes().size()));
             }
 
             update_shadow_tree();
@@ -1053,12 +1061,12 @@ void HTMLInputElement::update_slider_thumb_element()
 
 void HTMLInputElement::did_receive_focus()
 {
-    auto* browsing_context = document().browsing_context();
-    if (!browsing_context)
+    auto navigable = document().navigable();
+    if (!navigable)
         return;
     if (!m_text_node)
         return;
-    browsing_context->set_cursor_position(DOM::Position::create(realm(), *m_text_node, 0));
+    navigable->set_cursor_position(DOM::Position::create(realm(), *m_text_node, 0));
 }
 
 void HTMLInputElement::did_lose_focus()
@@ -1396,7 +1404,7 @@ void HTMLInputElement::set_checked_within_group()
     document().for_each_in_inclusive_subtree_of_type<HTML::HTMLInputElement>([&](auto& element) {
         if (element.checked() && &element != this && is_in_same_radio_button_group(*this, element))
             element.set_checked(false, ChangeSource::User);
-        return IterationDecision::Continue;
+        return TraversalDecision::Continue;
     });
 }
 
@@ -1423,9 +1431,9 @@ void HTMLInputElement::legacy_pre_activation_behavior()
         document().for_each_in_inclusive_subtree_of_type<HTML::HTMLInputElement>([&](auto& element) {
             if (element.checked() && is_in_same_radio_button_group(*this, element)) {
                 m_legacy_pre_activation_behavior_checked_element_in_group = &element;
-                return IterationDecision::Break;
+                return TraversalDecision::Break;
             }
-            return IterationDecision::Continue;
+            return TraversalDecision::Continue;
         });
 
         set_checked_within_group();
@@ -1523,24 +1531,6 @@ i32 HTMLInputElement::default_tab_index_value() const
 {
     // See the base function for the spec comments.
     return 0;
-}
-
-// https://html.spec.whatwg.org/multipage/input.html#image-button-state-(type=image):the-input-element-11
-void HTMLInputElement::apply_presentational_hints(CSS::StyleProperties& style) const
-{
-    // The input element supports dimension attributes.
-    if (type_state() != TypeAttributeState::ImageButton)
-        return;
-
-    for_each_attribute([&](auto& name, auto& value) {
-        if (name == HTML::AttributeNames::width) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Width, parsed_value.release_nonnull());
-        } else if (name == HTML::AttributeNames::height) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Height, parsed_value.release_nonnull());
-        }
-    });
 }
 
 //  https://html.spec.whatwg.org/multipage/input.html#dom-input-maxlength

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2023, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2024, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -109,9 +109,11 @@ public:
     WebIDL::ExceptionOr<JS::GCPtr<Attr>> set_attribute_node(Attr&);
     WebIDL::ExceptionOr<JS::GCPtr<Attr>> set_attribute_node_ns(Attr&);
 
+    void append_attribute(FlyString const& name, String const& value);
     void append_attribute(Attr&);
     void remove_attribute(FlyString const& name);
     void remove_attribute_ns(Optional<FlyString> const& namespace_, FlyString const& name);
+    WebIDL::ExceptionOr<JS::NonnullGCPtr<Attr>> remove_attribute_node(JS::NonnullGCPtr<Attr>);
 
     WebIDL::ExceptionOr<bool> toggle_attribute(FlyString const& name, Optional<bool> force);
     size_t attribute_list_size() const;
@@ -133,13 +135,17 @@ public:
     int client_left() const;
     int client_width() const;
     int client_height() const;
+    [[nodiscard]] double current_css_zoom() const;
 
-    void for_each_attribute(NOESCAPE Function<void(Attr const&)>) const;
+    void for_each_attribute(Function<void(Attr const&)>) const;
 
-    void for_each_attribute(NOESCAPE Function<void(FlyString const&, String const&)>) const;
+    void for_each_attribute(Function<void(FlyString const&, String const&)>) const;
 
     bool has_class(FlyString const&, CaseSensitivity = CaseSensitivity::CaseSensitive) const;
     Vector<FlyString> const& class_names() const { return m_classes; }
+
+    // https://html.spec.whatwg.org/multipage/embedded-content-other.html#dimension-attributes
+    virtual bool supports_dimension_attributes() const { return false; }
 
     virtual void apply_presentational_hints(CSS::StyleProperties&) const { }
 
@@ -154,8 +160,8 @@ public:
     Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element() const { return m_use_pseudo_element; }
     void set_use_pseudo_element(Optional<CSS::Selector::PseudoElement::Type> use_pseudo_element) { m_use_pseudo_element = move(use_pseudo_element); }
 
-    Layout::NodeWithStyle* layout_node();
-    Layout::NodeWithStyle const* layout_node() const;
+    JS::GCPtr<Layout::NodeWithStyle> layout_node();
+    JS::GCPtr<Layout::NodeWithStyle const> layout_node() const;
 
     CSS::StyleProperties* computed_css_values() { return m_computed_css_values.ptr(); }
     CSS::StyleProperties const* computed_css_values() const { return m_computed_css_values.ptr(); }
@@ -173,7 +179,7 @@ public:
     WebIDL::ExceptionOr<String> inner_html() const;
     WebIDL::ExceptionOr<void> set_inner_html(StringView);
 
-    WebIDL::ExceptionOr<void> insert_adjacent_html(String const& position, String const& text);
+    WebIDL::ExceptionOr<void> insert_adjacent_html(String const& position, String const&);
 
     WebIDL::ExceptionOr<String> outer_html() const;
     WebIDL::ExceptionOr<void> set_outer_html(String const&);
@@ -329,8 +335,10 @@ public:
     void set_custom_element_state(CustomElementState value) { m_custom_element_state = value; }
     void setup_custom_element_from_constructor(HTML::CustomElementDefinition& custom_element_definition, Optional<String> const& is_value);
 
-    void scroll(HTML::ScrollToOptions const&);
+    void scroll(HTML::ScrollToOptions);
     void scroll(double x, double y);
+    void scroll_by(HTML::ScrollToOptions);
+    void scroll_by(double x, double y);
 
     void register_intersection_observer(Badge<IntersectionObserver::IntersectionObserver>, IntersectionObserver::IntersectionObserverRegistration);
     void unregister_intersection_observer(Badge<IntersectionObserver::IntersectionObserver>, JS::NonnullGCPtr<IntersectionObserver::IntersectionObserver>);
@@ -391,6 +399,10 @@ private:
     WebIDL::ExceptionOr<JS::GCPtr<Node>> insert_adjacent(StringView where, JS::NonnullGCPtr<Node> node);
 
     void enqueue_an_element_on_the_appropriate_element_queue();
+
+    Optional<Directionality> auto_directionality() const;
+    Directionality parent_directionality() const;
+    bool is_auto_directionality_form_associated_element() const;
 
     QualifiedName m_qualified_name;
     FlyString m_html_uppercased_qualified_name;

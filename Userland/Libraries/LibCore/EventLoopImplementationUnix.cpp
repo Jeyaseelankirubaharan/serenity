@@ -16,6 +16,7 @@
 #include <LibCore/Socket.h>
 #include <LibCore/System.h>
 #include <LibCore/ThreadEventQueue.h>
+#include <pthread.h>
 #include <sys/select.h>
 #include <unistd.h>
 
@@ -25,7 +26,10 @@ namespace {
 struct ThreadData;
 class TimeoutSet;
 
-thread_local ThreadData* s_thread_data;
+HashMap<pthread_t, OwnPtr<ThreadData>> s_thread_data;
+static pthread_rwlock_t s_thread_data_lock_impl;
+static pthread_rwlock_t* s_thread_data_lock = nullptr;
+thread_local pthread_t s_thread_id;
 
 short notification_type_to_poll_events(NotificationType type)
 {
@@ -165,8 +169,6 @@ private:
 
 class EventLoopTimer final : public EventLoopTimeout {
 public:
-    static constexpr auto delay_tolerance = Duration::from_milliseconds(5);
-
     EventLoopTimer() = default;
 
     void reload(MonotonicTime const& now) { m_fire_time = now + interval; }
@@ -181,11 +183,6 @@ public:
         if (should_reload) {
             MonotonicTime next_fire_time = m_fire_time + interval;
             if (next_fire_time <= current_time) {
-                auto delay = current_time - next_fire_time;
-                if (delay >= delay_tolerance && !interval.is_zero()) {
-                    auto iterations = delay.to_milliseconds() / max<i64>(1, interval.to_milliseconds()) + 1;
-                    dbgln("Can't keep up! Skipping approximately {} iteration(s) of a reloading timer (delayed by {}ms).", iterations, delay.to_milliseconds());
-                }
                 next_fire_time = current_time + interval;
             }
             m_fire_time = next_fire_time;
@@ -214,16 +211,40 @@ public:
     bool should_reload { false };
     TimerShouldFireWhenNotVisible fire_when_not_visible { TimerShouldFireWhenNotVisible::No };
     WeakPtr<EventReceiver> owner;
+    pthread_t owner_thread { 0 };
+    Atomic<bool> is_being_deleted { false };
 };
 
 struct ThreadData {
     static ThreadData& the()
     {
-        if (!s_thread_data) {
-            // FIXME: Don't leak this.
-            s_thread_data = new ThreadData;
+        if (!s_thread_data_lock) {
+            pthread_rwlock_init(&s_thread_data_lock_impl, nullptr);
+            s_thread_data_lock = &s_thread_data_lock_impl;
         }
-        return *s_thread_data;
+
+        if (s_thread_id == 0)
+            s_thread_id = pthread_self();
+        ThreadData* data = nullptr;
+        pthread_rwlock_rdlock(&*s_thread_data_lock);
+        if (!s_thread_data.contains(s_thread_id)) {
+            data = new ThreadData;
+            pthread_rwlock_unlock(&*s_thread_data_lock);
+            pthread_rwlock_wrlock(&*s_thread_data_lock);
+            s_thread_data.set(s_thread_id, adopt_own(*data));
+        } else {
+            data = s_thread_data.get(s_thread_id).value();
+        }
+        pthread_rwlock_unlock(&*s_thread_data_lock);
+        return *data;
+    }
+
+    static ThreadData& for_thread(pthread_t thread_id)
+    {
+        pthread_rwlock_rdlock(&*s_thread_data_lock);
+        auto& result = *s_thread_data.get(thread_id).value();
+        pthread_rwlock_unlock(&*s_thread_data_lock);
+        return result;
     }
 
     ThreadData()
@@ -610,6 +631,7 @@ intptr_t EventLoopManagerUnix::register_timer(EventReceiver& object, int millise
     VERIFY(milliseconds >= 0);
     auto& thread_data = ThreadData::the();
     auto timer = new EventLoopTimer;
+    timer->owner_thread = s_thread_id;
     timer->owner = object;
     timer->interval = Duration::from_milliseconds(milliseconds);
     timer->reload(MonotonicTime::now_coarse());
@@ -621,11 +643,14 @@ intptr_t EventLoopManagerUnix::register_timer(EventReceiver& object, int millise
 
 void EventLoopManagerUnix::unregister_timer(intptr_t timer_id)
 {
-    auto& thread_data = ThreadData::the();
     auto* timer = bit_cast<EventLoopTimer*>(timer_id);
-    if (timer->is_scheduled())
-        thread_data.timeouts.unschedule(timer);
-    delete timer;
+    auto& thread_data = ThreadData::for_thread(timer->owner_thread);
+    auto expected = false;
+    if (timer->is_being_deleted.compare_exchange_strong(expected, true, AK::MemoryOrder::memory_order_acq_rel)) {
+        if (timer->is_scheduled())
+            thread_data.timeouts.unschedule(timer);
+        delete timer;
+    }
 }
 
 void EventLoopManagerUnix::register_notifier(Notifier& notifier)
@@ -639,11 +664,13 @@ void EventLoopManagerUnix::register_notifier(Notifier& notifier)
         .events = notification_type_to_poll_events(notifier.type()),
         .revents = 0,
     });
+
+    notifier.set_owner_thread(s_thread_id);
 }
 
 void EventLoopManagerUnix::unregister_notifier(Notifier& notifier)
 {
-    auto& thread_data = ThreadData::the();
+    auto& thread_data = ThreadData::for_thread(notifier.owner_thread());
 
     auto it = thread_data.notifier_by_ptr.find(&notifier);
     VERIFY(it != thread_data.notifier_by_ptr.end());

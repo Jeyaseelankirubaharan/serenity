@@ -10,6 +10,7 @@
 #include <AK/Variant.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Heap/Cell.h>
+#include <LibJS/Heap/CellAllocator.h>
 
 namespace Web::WebIDL {
 
@@ -28,6 +29,8 @@ public:
     u32 byte_length() const;
 
     JS::NonnullGCPtr<JS::Object> raw_object();
+    JS::NonnullGCPtr<JS::Object const> raw_object() const { return const_cast<BufferableObjectBase&>(*this).raw_object(); }
+
     JS::GCPtr<JS::ArrayBuffer> viewed_array_buffer();
 
     BufferableObject const& bufferable_object() const { return m_bufferable_object; }

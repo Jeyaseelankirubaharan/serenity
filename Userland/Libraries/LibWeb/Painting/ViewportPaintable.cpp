@@ -128,6 +128,10 @@ void ViewportPaintable::assign_clip_frames()
 
 void ViewportPaintable::refresh_scroll_state()
 {
+    if (!m_needs_to_refresh_scroll_state)
+        return;
+    m_needs_to_refresh_scroll_state = false;
+
     for (auto& it : scroll_state) {
         auto const& paintable_box = *it.key;
         auto& scroll_frame = *it.value;
@@ -142,6 +146,10 @@ void ViewportPaintable::refresh_scroll_state()
 
 void ViewportPaintable::refresh_clip_state()
 {
+    if (!m_needs_to_refresh_clip_state)
+        return;
+    m_needs_to_refresh_clip_state = false;
+
     for (auto& it : clip_state) {
         auto const& paintable_box = *it.key;
         auto& clip_frame = *it.value;
@@ -440,6 +448,16 @@ void ViewportPaintable::resolve_paint_only_properties()
             inline_paintable.set_outline_offset(outline_offset);
         }
 
+        if (is_paintable_box) {
+            auto& paintable_box = static_cast<Painting::PaintableBox&>(paintable);
+            auto combined_transform = paintable.compute_combined_css_transform();
+            paintable_box.set_combined_css_transform(combined_transform);
+        } else if (is_inline_paintable) {
+            auto& inline_paintable = static_cast<Painting::InlinePaintable&>(paintable);
+            auto combined_transform = paintable.compute_combined_css_transform();
+            inline_paintable.set_combined_css_transform(combined_transform);
+        }
+
         return TraversalDecision::Continue;
     });
 }
@@ -515,13 +533,16 @@ void ViewportPaintable::recompute_selection_states()
     }
 }
 
+bool ViewportPaintable::handle_mousewheel(Badge<EventHandler>, CSSPixelPoint, unsigned, unsigned, int, int)
+{
+    return false;
+}
+
 void ViewportPaintable::visit_edges(Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto it : scroll_state)
-        visitor.visit(it.key);
-    for (auto it : clip_state)
-        visitor.visit(it.key);
+    visitor.visit(scroll_state);
+    visitor.visit(clip_state);
 }
 
 }

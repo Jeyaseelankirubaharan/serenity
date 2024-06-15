@@ -57,6 +57,8 @@ private:
     virtual void update_screen_rects(u64 page_id, Vector<Web::DevicePixelRect> const&, u32) override;
     virtual void load_url(u64 page_id, URL::URL const&) override;
     virtual void load_html(u64 page_id, ByteString const&) override;
+    virtual void reload(u64 page_id) override;
+    virtual void traverse_the_history_by_delta(u64 page_id, i32 delta) override;
     virtual void set_viewport_rect(u64 page_id, Web::DevicePixelRect const&) override;
     virtual void key_event(u64 page_id, Web::KeyEvent const&) override;
     virtual void mouse_event(u64 page_id, Web::MouseEvent const&) override;
@@ -127,6 +129,10 @@ private:
 
     virtual Messages::WebContentServer::GetSelectedTextResponse get_selected_text(u64 page_id) override;
     virtual void select_all(u64 page_id) override;
+
+    virtual void find_in_page(u64 page_id, String const& query, CaseSensitivity) override;
+    virtual void find_in_page_next_match(u64 page_id) override;
+    virtual void find_in_page_previous_match(u64 page_id) override;
 
     virtual void paste(u64 page_id, String const& text) override;
 

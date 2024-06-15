@@ -69,11 +69,8 @@ void EventTarget::visit_edges(Cell::Visitor& visitor)
     Base::visit_edges(visitor);
 
     if (auto const* data = m_data.ptr()) {
-        for (auto& event_listener : data->event_listener_list)
-            visitor.visit(event_listener);
-
-        for (auto& it : data->event_handler_map)
-            visitor.visit(it.value);
+        visitor.visit(data->event_listener_list);
+        visitor.visit(data->event_handler_map);
     }
 }
 
@@ -488,7 +485,8 @@ WebIDL::CallbackType* EventTarget::get_current_value_of_event_handler(FlyString 
 
         //  6. Return scope. (NOTE: Not necessary)
 
-        auto function = JS::ECMAScriptFunctionObject::create(realm, name.to_deprecated_fly_string(), builder.to_byte_string(), program->body(), program->parameters(), program->function_length(), program->local_variables_names(), scope, nullptr, JS::FunctionKind::Normal, program->is_strict_mode(), program->might_need_arguments_object(), is_arrow_function);
+        auto function = JS::ECMAScriptFunctionObject::create(realm, name.to_deprecated_fly_string(), builder.to_byte_string(), program->body(), program->parameters(), program->function_length(), program->local_variables_names(), scope, nullptr, JS::FunctionKind::Normal, program->is_strict_mode(),
+            program->parsing_insights(), is_arrow_function);
 
         // 10. Remove settings object's realm execution context from the JavaScript execution context stack.
         VERIFY(vm.execution_context_stack().last() == &settings_object.realm_execution_context());

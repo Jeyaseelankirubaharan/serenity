@@ -5,6 +5,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLIFrameElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/BrowsingContext.h>
@@ -132,8 +133,8 @@ void HTMLIFrameElement::process_the_iframe_attributes(bool initial_insertion)
         return;
     }
 
-    // FIXME: 4. Let referrerPolicy be the current state of element's referrerpolicy content attribute.
-    auto referrer_policy = ReferrerPolicy::ReferrerPolicy::EmptyString;
+    // 4. Let referrerPolicy be the current state of element's referrerpolicy content attribute.
+    auto referrer_policy = ReferrerPolicy::from_string(get_attribute_value(HTML::AttributeNames::referrerpolicy)).value_or(ReferrerPolicy::ReferrerPolicy::EmptyString);
 
     // 5. Set element's current navigation was lazy loaded boolean to false.
     set_current_navigation_was_lazy_loaded(false);
@@ -167,20 +168,6 @@ void HTMLIFrameElement::removed_from(DOM::Node* node)
 
     // When an iframe element is removed from a document, the user agent must destroy the nested navigable of the element.
     destroy_the_child_navigable();
-}
-
-// https://html.spec.whatwg.org/multipage/rendering.html#attributes-for-embedded-content-and-images
-void HTMLIFrameElement::apply_presentational_hints(CSS::StyleProperties& style) const
-{
-    for_each_attribute([&](auto& name, auto& value) {
-        if (name == HTML::AttributeNames::width) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Width, parsed_value.release_nonnull());
-        } else if (name == HTML::AttributeNames::height) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Height, parsed_value.release_nonnull());
-        }
-    });
 }
 
 // https://html.spec.whatwg.org/multipage/iframe-embed-object.html#iframe-load-event-steps

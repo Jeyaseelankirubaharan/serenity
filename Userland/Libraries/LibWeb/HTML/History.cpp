@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HistoryPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/History.h>
 #include <LibWeb/HTML/StructuredSerialize.h>
 #include <LibWeb/HTML/TraversableNavigable.h>
-#include <LibWeb/Page/Page.h>
 
 namespace Web::HTML {
 
@@ -74,6 +74,11 @@ WebIDL::ExceptionOr<JS::Value> History::state() const
         return WebIDL::SecurityError::create(realm(), "Cannot perform state on a document that isn't fully active."_fly_string);
 
     // 2. Return this's state.
+    return m_state;
+}
+
+JS::Value History::unsafe_state() const
+{
     return m_state;
 }
 
@@ -207,11 +212,6 @@ WebIDL::ExceptionOr<void> History::shared_history_push_replace_state(JS::Value d
     ///          with navigationType set to historyHandling, isSameDocument set to true, destinationURL set to newURL,
     //           and classicHistoryAPIState set to serializedData.
     // FIXME: 9. If continue is false, then return.
-
-    auto navigable = document->navigable();
-    if (navigable->is_top_level_traversable()) {
-        navigable->active_browsing_context()->page().client().page_did_update_url(new_url, history_handling);
-    }
 
     // 10. Run the URL and history update steps given document and newURL, with serializedData set to
     //     serializedData and historyHandling set to historyHandling.

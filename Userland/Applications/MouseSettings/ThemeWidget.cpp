@@ -7,7 +7,6 @@
 #include "ThemeWidget.h"
 
 #include <AK/LexicalPath.h>
-#include <Applications/MouseSettings/ThemeWidgetGML.h>
 #include <LibCore/Directory.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/ComboBox.h>
@@ -15,6 +14,7 @@
 #include <LibGUI/SortingProxyModel.h>
 #include <LibGUI/TableView.h>
 
+namespace MouseSettings {
 ErrorOr<String> MouseCursorModel::column_name(int column_index) const
 {
     switch (column_index) {
@@ -113,16 +113,8 @@ Vector<GUI::ModelIndex> ThemeModel::matches(StringView needle, unsigned flags, c
     return found;
 }
 
-ErrorOr<NonnullRefPtr<ThemeWidget>> ThemeWidget::try_create()
+ErrorOr<void> ThemeWidget::initialize()
 {
-    auto widget = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) ThemeWidget()));
-    TRY(widget->setup());
-    return widget;
-}
-
-ErrorOr<void> ThemeWidget::setup()
-{
-    TRY(load_from_gml(theme_widget_gml));
     m_cursors_tableview = find_descendant_of_type_named<GUI::TableView>("cursors_tableview");
     m_cursors_tableview->set_highlight_selected_rows(true);
     m_cursors_tableview->set_alternating_row_colors(false);
@@ -143,6 +135,7 @@ ErrorOr<void> ThemeWidget::setup()
     m_mouse_cursor_model->change_theme(theme_name);
 
     m_theme_name_box = find_descendant_of_type_named<GUI::ComboBox>("theme_name_box");
+    m_theme_name_box->set_only_allow_values_from_model(true);
     m_theme_name_box->on_change = [this](ByteString const& value, GUI::ModelIndex const&) {
         m_mouse_cursor_model->change_theme(value);
         set_modified(true);
@@ -161,4 +154,5 @@ void ThemeWidget::apply_settings()
 void ThemeWidget::reset_default_values()
 {
     m_theme_name_box->set_text("Default");
+}
 }

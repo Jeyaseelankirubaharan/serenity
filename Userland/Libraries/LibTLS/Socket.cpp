@@ -66,6 +66,10 @@ ErrorOr<NonnullOwnPtr<TLSv12>> TLSv12::connect(ByteString const& host, u16 port,
     };
 
     TRY(promise->await());
+
+    tls_socket->on_tls_error = nullptr;
+    tls_socket->on_connected = nullptr;
+    tls_socket->m_context.should_expect_successful_read = true;
     return tls_socket;
 }
 
@@ -83,6 +87,10 @@ ErrorOr<NonnullOwnPtr<TLSv12>> TLSv12::connect(ByteString const& host, Core::Soc
         promise->reject(AK::Error::from_string_view(enum_to_string(alert)));
     };
     TRY(promise->await());
+
+    tls_socket->on_tls_error = nullptr;
+    tls_socket->on_connected = nullptr;
+    tls_socket->m_context.should_expect_successful_read = true;
     return tls_socket;
 }
 
@@ -115,7 +123,7 @@ void TLSv12::setup_connection()
                     // Extend the timer, we are too slow.
                     m_handshake_timeout_timer->restart(m_max_wait_time_for_handshake_in_seconds * 1000);
                 }
-            }).release_value_but_fixme_should_propagate_errors();
+            });
         auto packet = build_hello();
         write_packet(packet);
         write_into_socket();
@@ -174,6 +182,16 @@ ErrorOr<void> TLSv12::read_from_socket()
         consume(read_bytes);
     } while (!read_bytes.is_empty() && !m_context.critical_error);
 
+    if (m_context.should_expect_successful_read && read_bytes.is_empty()) {
+        // read_some() returned an empty span, this is either an EOF (from improper closure)
+        // or some sort of weird even that is showing itself as an EOF.
+        // To guard against servers closing the connection weirdly or just improperly, make sure
+        // to check the connection state here and send the appropriate notifications.
+        stream.close();
+
+        check_connection_state(true);
+    }
+
     return {};
 }
 
@@ -204,6 +222,11 @@ bool TLSv12::check_connection_state(bool read)
         m_context.connection_finished = true;
         m_context.connection_status = ConnectionStatus::Disconnected;
         close();
+        m_context.has_invoked_finish_or_error_callback = true;
+        if (on_ready_to_read)
+            on_ready_to_read(); // Notify the client about the weird event.
+        if (on_tls_finished)
+            on_tls_finished();
         return false;
     }
 
@@ -291,7 +314,8 @@ ErrorOr<bool> TLSv12::flush()
 
 void TLSv12::close()
 {
-    alert(AlertLevel::FATAL, AlertDescription::CLOSE_NOTIFY);
+    if (underlying_stream().is_open())
+        alert(AlertLevel::FATAL, AlertDescription::CLOSE_NOTIFY);
     // bye bye.
     m_context.connection_status = ConnectionStatus::Disconnected;
 }

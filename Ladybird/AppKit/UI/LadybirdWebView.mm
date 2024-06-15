@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, Tim Flynn <trflynn89@serenityos.org>
+ * Copyright (c) 2023-2024, Tim Flynn <trflynn89@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -15,6 +15,7 @@
 #include <LibWebView/URL.h>
 #include <UI/LadybirdWebViewBridge.h>
 
+#import <Application/Application.h>
 #import <Application/ApplicationDelegate.h>
 #import <UI/Event.h>
 #import <UI/LadybirdWebView.h>
@@ -106,6 +107,8 @@ struct HideCursor {
         m_web_view_bridge = MUST(Ladybird::WebViewBridge::create(move(screen_rects), device_pixel_ratio, [delegate webContentOptions], [delegate webdriverContentIPCPath], [delegate preferredColorScheme]));
         [self setWebViewCallbacks];
 
+        m_web_view_bridge->initialize_client();
+
         auto* area = [[NSTrackingArea alloc] initWithRect:[self bounds]
                                                   options:NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect | NSTrackingMouseMoved
                                                     owner:self
@@ -126,6 +129,21 @@ struct HideCursor {
 - (void)loadHTML:(StringView)html
 {
     m_web_view_bridge->load_html(html);
+}
+
+- (void)navigateBack
+{
+    m_web_view_bridge->traverse_the_history_by_delta(-1);
+}
+
+- (void)navigateForward
+{
+    m_web_view_bridge->traverse_the_history_by_delta(1);
+}
+
+- (void)reload
+{
+    m_web_view_bridge->reload();
 }
 
 - (WebView::ViewImplementation&)view
@@ -160,6 +178,22 @@ struct HideCursor {
 - (void)handleVisibility:(BOOL)is_visible
 {
     m_web_view_bridge->set_system_visibility_state(is_visible);
+}
+
+- (void)findInPage:(NSString*)query
+    caseSensitivity:(CaseSensitivity)case_sensitivity
+{
+    m_web_view_bridge->find_in_page(Ladybird::ns_string_to_string(query), case_sensitivity);
+}
+
+- (void)findInPageNextMatch
+{
+    m_web_view_bridge->find_in_page_next_match();
+}
+
+- (void)findInPagePreviousMatch
+{
+    m_web_view_bridge->find_in_page_previous_match();
 }
 
 - (void)zoomIn
@@ -262,6 +296,16 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
         return [self.observer onCreateNewTab:"about:blank"sv activateTab:activate_tab];
     };
 
+    m_web_view_bridge->on_request_web_content = [self]() {
+        Application* application = NSApp;
+        return [application launchWebContent:*m_web_view_bridge].release_value_but_fixme_should_propagate_errors();
+    };
+
+    m_web_view_bridge->on_request_worker_agent = []() {
+        Application* application = NSApp;
+        return [application launchWebWorker].release_value_but_fixme_should_propagate_errors();
+    };
+
     m_web_view_bridge->on_activate_tab = [self]() {
         [[self window] orderFront:nil];
     };
@@ -282,8 +326,13 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
         [self.observer onLoadFinish:url];
     };
 
-    m_web_view_bridge->on_url_updated = [self](auto const& url, auto history_behavior) {
-        [self.observer onURLUpdated:url historyBehavior:history_behavior];
+    m_web_view_bridge->on_url_change = [self](auto const& url) {
+        [self.observer onURLChange:url];
+    };
+
+    m_web_view_bridge->on_navigation_buttons_state_changed = [self](auto back_enabled, auto forward_enabled) {
+        [self.observer onBackNavigationEnabled:back_enabled
+                      forwardNavigationEnabled:forward_enabled];
     };
 
     m_web_view_bridge->on_title_change = [self](auto const& title) {
@@ -402,15 +451,15 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
     };
 
     m_web_view_bridge->on_navigate_back = [self]() {
-        [self.observer onNavigateBack];
+        [self navigateBack];
     };
 
     m_web_view_bridge->on_navigate_forward = [self]() {
-        [self.observer onNavigateForward];
+        [self navigateForward];
     };
 
     m_web_view_bridge->on_refresh = [self]() {
-        [self.observer onReload];
+        [self reload];
     };
 
     m_web_view_bridge->on_enter_tooltip_area = [self](auto, auto const& tooltip) {
@@ -1305,13 +1354,13 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
 
 - (void)mouseMoved:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], GUI::MouseButton::None);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], Web::UIEvents::MouseButton::None);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
 - (void)scrollWheel:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseWheel, event, self, [self scrollView], GUI::MouseButton::Middle);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseWheel, event, self, [self scrollView], Web::UIEvents::MouseButton::Middle);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
@@ -1319,19 +1368,19 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
 {
     [[self window] makeFirstResponder:self];
 
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseDown, event, self, [self scrollView], GUI::MouseButton::Primary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseDown, event, self, [self scrollView], Web::UIEvents::MouseButton::Primary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
 - (void)mouseUp:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseUp, event, self, [self scrollView], GUI::MouseButton::Primary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseUp, event, self, [self scrollView], Web::UIEvents::MouseButton::Primary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
 - (void)mouseDragged:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], GUI::MouseButton::Primary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], Web::UIEvents::MouseButton::Primary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
@@ -1339,19 +1388,19 @@ static void copy_data_to_clipboard(StringView data, NSPasteboardType pasteboard_
 {
     [[self window] makeFirstResponder:self];
 
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseDown, event, self, [self scrollView], GUI::MouseButton::Primary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseDown, event, self, [self scrollView], Web::UIEvents::MouseButton::Primary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
 - (void)rightMouseUp:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseUp, event, self, [self scrollView], GUI::MouseButton::Secondary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseUp, event, self, [self scrollView], Web::UIEvents::MouseButton::Secondary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 
 - (void)rightMouseDragged:(NSEvent*)event
 {
-    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], GUI::MouseButton::Secondary);
+    auto mouse_event = Ladybird::ns_event_to_mouse_event(Web::MouseEvent::Type::MouseMove, event, self, [self scrollView], Web::UIEvents::MouseButton::Secondary);
     m_web_view_bridge->enqueue_input_event(move(mouse_event));
 }
 

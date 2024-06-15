@@ -24,6 +24,8 @@ endpoint WebContentServer
 
     load_url(u64 page_id, URL::URL url) =|
     load_html(u64 page_id, ByteString html) =|
+    reload(u64 page_id) =|
+    traverse_the_history_by_delta(u64 page_id, i32 delta) =|
 
     add_backing_store(u64 page_id, i32 front_bitmap_id, Gfx::ShareableBitmap front_bitmap, i32 back_bitmap_id, Gfx::ShareableBitmap back_bitmap) =|
     ready_to_paint(u64 page_id) =|
@@ -66,6 +68,10 @@ endpoint WebContentServer
     get_selected_text(u64 page_id) => (ByteString selection)
     select_all(u64 page_id) =|
     paste(u64 page_id, String text) =|
+
+    find_in_page(u64 page_id, String query, AK::CaseSensitivity case_sensitivity) =|
+    find_in_page_next_match(u64 page_id) =|
+    find_in_page_previous_match(u64 page_id) =|
 
     set_content_filters(u64 page_id, Vector<String> filters) =|
     set_autoplay_allowed_on_all_websites(u64 page_id) =|

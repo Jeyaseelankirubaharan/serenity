@@ -93,6 +93,7 @@ public:
     JS::GCPtr<Navigable> navigable() const;
 
     ImportMap const& import_map() const { return m_import_map; }
+    void set_import_map(ImportMap const& import_map) { m_import_map = import_map; }
 
     bool import_maps_allowed() const { return m_import_maps_allowed; }
     void set_import_maps_allowed(bool import_maps_allowed) { m_import_maps_allowed = import_maps_allowed; }
@@ -115,8 +116,14 @@ public:
 
     AnimationFrameCallbackDriver& animation_frame_callback_driver() { return m_animation_frame_callback_driver; }
 
+    // https://html.spec.whatwg.org/multipage/interaction.html#sticky-activation
+    bool has_sticky_activation() const;
+
     // https://html.spec.whatwg.org/multipage/interaction.html#transient-activation
     bool has_transient_activation() const;
+
+    // https://html.spec.whatwg.org/multipage/interaction.html#history-action-activation
+    bool has_history_action_activation() const;
 
     WebIDL::ExceptionOr<void> initialize_web_interfaces(Badge<WindowEnvironmentSettingsObject>);
 
@@ -126,8 +133,8 @@ public:
     CrossOriginPropertyDescriptorMap const& cross_origin_property_descriptor_map() const { return m_cross_origin_property_descriptor_map; }
     CrossOriginPropertyDescriptorMap& cross_origin_property_descriptor_map() { return m_cross_origin_property_descriptor_map; }
 
-    WebIDL::ExceptionOr<JS::NonnullGCPtr<WebIDL::CallbackType>> count_queuing_strategy_size_function();
-    WebIDL::ExceptionOr<JS::NonnullGCPtr<WebIDL::CallbackType>> byte_length_queuing_strategy_size_function();
+    JS::NonnullGCPtr<WebIDL::CallbackType> count_queuing_strategy_size_function();
+    JS::NonnullGCPtr<WebIDL::CallbackType> byte_length_queuing_strategy_size_function();
 
     // JS API functions
     JS::NonnullGCPtr<WindowProxy> window() const;
@@ -202,10 +209,20 @@ public:
 
     [[nodiscard]] JS::NonnullGCPtr<Crypto::Crypto> crypto();
 
+    void capture_events();
+    void release_events();
+
     [[nodiscard]] JS::NonnullGCPtr<CustomElementRegistry> custom_elements();
 
-    HighResolutionTime::DOMHighResTimeStamp get_last_activation_timestamp() const { return m_last_activation_timestamp; }
+    HighResolutionTime::DOMHighResTimeStamp last_activation_timestamp() const { return m_last_activation_timestamp; }
     void set_last_activation_timestamp(HighResolutionTime::DOMHighResTimeStamp timestamp) { m_last_activation_timestamp = timestamp; }
+
+    void consume_user_activation();
+
+    HighResolutionTime::DOMHighResTimeStamp last_history_action_activation_timestamp() const { return m_last_history_action_activation_timestamp; }
+    void set_last_history_action_activation_timestamp(HighResolutionTime::DOMHighResTimeStamp timestamp) { m_last_history_action_activation_timestamp = timestamp; }
+
+    void consume_history_action_user_activation();
 
     static void set_inspector_object_exposed(bool);
     static void set_internals_object_exposed(bool);
@@ -279,7 +296,10 @@ private:
     CrossOriginPropertyDescriptorMap m_cross_origin_property_descriptor_map;
 
     // https://html.spec.whatwg.org/multipage/interaction.html#user-activation-data-model
-    HighResolutionTime::DOMHighResTimeStamp m_last_activation_timestamp { NumericLimits<double>::max() };
+    HighResolutionTime::DOMHighResTimeStamp m_last_activation_timestamp { AK::Infinity<double> };
+
+    // https://html.spec.whatwg.org/multipage/interaction.html#last-history-action-activation-timestamp
+    HighResolutionTime::DOMHighResTimeStamp m_last_history_action_activation_timestamp { AK::Infinity<double> };
 
     // https://streams.spec.whatwg.org/#count-queuing-strategy-size-function
     JS::GCPtr<WebIDL::CallbackType> m_count_queuing_strategy_size_function;

@@ -30,6 +30,7 @@ public:
     static JS::NonnullGCPtr<PageClient> create(JS::VM& vm, PageHost& page_host, u64 id);
 
     static void set_use_gpu_painter();
+    static void set_use_experimental_cpu_transform_support();
 
     virtual void schedule_repaint() override;
     virtual bool is_ready_to_paint() const override;
@@ -39,6 +40,7 @@ public:
 
     ErrorOr<void> connect_to_webdriver(ByteString const& webdriver_ipc_path);
 
+    virtual void paint_next_frame() override;
     virtual void paint(Web::DevicePixelRect const& content_rect, Gfx::Bitmap&, Web::PaintOptions = {}) override;
 
     void set_palette_impl(Gfx::PaletteImpl&);
@@ -95,6 +97,7 @@ private:
     virtual void page_did_request_cursor_change(Gfx::StandardCursor) override;
     virtual void page_did_layout() override;
     virtual void page_did_change_title(ByteString const&) override;
+    virtual void page_did_change_url(URL::URL const&) override;
     virtual void page_did_request_navigate_back() override;
     virtual void page_did_request_navigate_forward() override;
     virtual void page_did_request_refresh() override;
@@ -117,9 +120,9 @@ private:
     virtual void page_did_request_media_context_menu(Web::CSSPixelPoint, ByteString const& target, unsigned modifiers, Web::Page::MediaContextMenu) override;
     virtual void page_did_start_loading(URL::URL const&, bool) override;
     virtual void page_did_create_new_document(Web::DOM::Document&) override;
+    virtual void page_did_change_active_document_in_top_level_browsing_context(Web::DOM::Document&) override;
     virtual void page_did_destroy_document(Web::DOM::Document&) override;
     virtual void page_did_finish_loading(URL::URL const&) override;
-    virtual void page_did_update_url(URL::URL const&, Web::HTML::HistoryHandlingBehavior) override;
     virtual void page_did_request_alert(String const&) override;
     virtual void page_did_request_confirm(String const&) override;
     virtual void page_did_request_prompt(String const&, String const&) override;
@@ -136,6 +139,7 @@ private:
     virtual NewWebViewResult page_did_request_new_web_view(Web::HTML::ActivateTab, Web::HTML::WebViewHints, Web::HTML::TokenizedFeature::NoOpener) override;
     virtual void page_did_request_activate_tab() override;
     virtual void page_did_close_top_level_traversable() override;
+    virtual void page_did_update_navigation_buttons_state(bool back_enabled, bool forward_enabled) override;
     virtual void request_file(Web::FileRequest) override;
     virtual void page_did_request_color_picker(Color current_color) override;
     virtual void page_did_request_file_picker(Web::HTML::FileFilter accepted_file_types, Web::HTML::AllowMultipleFiles) override;
@@ -144,7 +148,7 @@ private:
     virtual void page_did_change_theme_color(Gfx::Color color) override;
     virtual void page_did_insert_clipboard_entry(String data, String presentation_style, String mime_type) override;
     virtual void page_did_change_audio_play_state(Web::HTML::AudioPlayState) override;
-    virtual WebView::SocketPair request_worker_agent() override;
+    virtual IPC::File request_worker_agent() override;
     virtual void inspector_did_load() override;
     virtual void inspector_did_select_dom_node(i32 node_id, Optional<Web::CSS::Selector::PseudoElement::Type> const& pseudo_element) override;
     virtual void inspector_did_set_dom_node_text(i32 node_id, String const& text) override;
@@ -175,7 +179,6 @@ private:
     };
 
     PaintState m_paint_state { PaintState::Ready };
-    RefPtr<Web::Platform::Timer> m_repaint_timer;
 
     Web::CSS::PreferredColorScheme m_preferred_color_scheme { Web::CSS::PreferredColorScheme::Auto };
 
@@ -193,7 +196,8 @@ private:
     };
     BackingStores m_backing_stores;
 
-    HashMap<JS::NonnullGCPtr<Web::DOM::Document>, NonnullOwnPtr<WebContentConsoleClient>> m_console_clients;
+    // NOTE: These documents are not visited, but manually removed from the map on document finalization.
+    HashMap<JS::RawGCPtr<Web::DOM::Document>, JS::NonnullGCPtr<WebContentConsoleClient>> m_console_clients;
     WeakPtr<WebContentConsoleClient> m_top_level_document_console_client;
 
     JS::Handle<JS::GlobalObject> m_console_global_object;

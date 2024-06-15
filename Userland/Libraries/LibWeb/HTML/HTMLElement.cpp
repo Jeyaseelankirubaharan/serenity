@@ -7,8 +7,10 @@
 #include <AK/StringBuilder.h>
 #include <LibWeb/ARIA/Roles.h>
 #include <LibWeb/Bindings/ExceptionOrUtils.h>
+#include <LibWeb/Bindings/HTMLElementPrototype.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/IDLEventListener.h>
+#include <LibWeb/DOM/LiveNodeList.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/DOMStringMap.h>
@@ -19,6 +21,7 @@
 #include <LibWeb/HTML/HTMLBaseElement.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/HTML/HTMLLabelElement.h>
 #include <LibWeb/HTML/NavigableContainer.h>
 #include <LibWeb/HTML/VisibilityState.h>
 #include <LibWeb/HTML/Window.h>
@@ -50,14 +53,20 @@ void HTMLElement::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
     WEB_SET_PROTOTYPE_FOR_INTERFACE(HTMLElement);
-
-    m_dataset = DOMStringMap::create(*this);
 }
 
 void HTMLElement::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_dataset);
+    visitor.visit(m_labels);
+}
+
+JS::NonnullGCPtr<DOMStringMap> HTMLElement::dataset()
+{
+    if (!m_dataset)
+        m_dataset = DOMStringMap::create(*this);
+    return *m_dataset;
 }
 
 // https://html.spec.whatwg.org/multipage/dom.html#dom-dir
@@ -146,8 +155,18 @@ void HTMLElement::set_inner_text(StringView text)
     set_needs_style_update(true);
 }
 
-String HTMLElement::inner_text()
+// https://html.spec.whatwg.org/multipage/dom.html#the-innertext-idl-attribute:dom-outertext-2
+WebIDL::ExceptionOr<void> HTMLElement::set_outer_text(String)
 {
+    dbgln("FIXME: Implement HTMLElement::set_outer_text()");
+    return {};
+}
+
+// https://html.spec.whatwg.org/multipage/dom.html#get-the-text-steps
+String HTMLElement::get_the_text_steps()
+{
+    // FIXME: Implement this according to spec.
+
     StringBuilder builder;
 
     // innerText for element being rendered takes visibility into account, so force a layout and then walk the layout tree.
@@ -167,6 +186,20 @@ String HTMLElement::inner_text()
     recurse(*layout_node());
 
     return MUST(builder.to_string());
+}
+
+// https://html.spec.whatwg.org/multipage/dom.html#dom-innertext
+String HTMLElement::inner_text()
+{
+    // The innerText and outerText getter steps are to return the result of running get the text steps with this.
+    return get_the_text_steps();
+}
+
+// https://html.spec.whatwg.org/multipage/dom.html#dom-outertext
+String HTMLElement::outer_text()
+{
+    // The innerText and outerText getter steps are to return the result of running get the text steps with this.
+    return get_the_text_steps();
 }
 
 // https://www.w3.org/TR/cssom-view-1/#dom-htmlelement-offsetparent
@@ -406,6 +439,25 @@ bool HTMLElement::fire_a_synthetic_pointer_event(FlyString const& type, DOM::Ele
     return target.dispatch_event(event);
 }
 
+// https://html.spec.whatwg.org/multipage/forms.html#dom-lfe-labels-dev
+JS::GCPtr<DOM::NodeList> HTMLElement::labels()
+{
+    // Labelable elements and all input elements have a live NodeList object associated with them that represents the list of label elements, in tree order,
+    // whose labeled control is the element in question. The labels IDL attribute of labelable elements that are not form-associated custom elements,
+    // and the labels IDL attribute of input elements, on getting, must return that NodeList object, and that same value must always be returned,
+    // unless this element is an input element whose type attribute is in the Hidden state, in which case it must instead return null.
+    if (!is_labelable())
+        return {};
+
+    if (!m_labels) {
+        m_labels = DOM::LiveNodeList::create(realm(), root(), DOM::LiveNodeList::Scope::Descendants, [&](auto& node) {
+            return is<HTMLLabelElement>(node) && verify_cast<HTMLLabelElement>(node).control() == this;
+        });
+    }
+
+    return m_labels;
+}
+
 // https://html.spec.whatwg.org/multipage/interaction.html#dom-click
 void HTMLElement::click()
 {
@@ -560,10 +612,17 @@ void HTMLElement::did_receive_focus()
 {
     if (m_content_editable_state != ContentEditableState::True)
         return;
-    auto* browsing_context = document().browsing_context();
-    if (!browsing_context)
+    auto navigable = document().navigable();
+    if (!navigable)
         return;
-    browsing_context->set_cursor_position(DOM::Position::create(realm(), *this, 0));
+    navigable->set_cursor_position(DOM::Position::create(realm(), *this, 0));
+}
+
+// https://html.spec.whatwg.org/multipage/interaction.html#dom-accesskeylabel
+String HTMLElement::access_key_label() const
+{
+    dbgln("FIXME: Implement HTMLElement::access_key_label()");
+    return String {};
 }
 
 }

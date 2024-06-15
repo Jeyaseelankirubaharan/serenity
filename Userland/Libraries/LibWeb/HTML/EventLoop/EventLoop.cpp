@@ -27,9 +27,6 @@ EventLoop::EventLoop()
 {
     m_task_queue = heap().allocate_without_realm<TaskQueue>(*this);
     m_microtask_queue = heap().allocate_without_realm<TaskQueue>(*this);
-
-    for (size_t i = 0; i < m_blocked_task_sources.size(); ++i)
-        m_blocked_task_sources[i] = false;
 }
 
 EventLoop::~EventLoop() = default;
@@ -40,9 +37,7 @@ void EventLoop::visit_edges(Visitor& visitor)
     visitor.visit(m_task_queue);
     visitor.visit(m_microtask_queue);
     visitor.visit(m_currently_running_task);
-
-    for (auto& settings : m_backup_incumbent_settings_object_stack)
-        visitor.visit(settings);
+    visitor.visit(m_backup_incumbent_settings_object_stack);
 }
 
 void EventLoop::schedule()
@@ -60,31 +55,6 @@ void EventLoop::schedule()
 EventLoop& main_thread_event_loop()
 {
     return *static_cast<Bindings::WebEngineCustomData*>(Bindings::main_thread_vm().custom_data())->event_loop;
-}
-
-bool EventLoop::is_task_source_blocked(Task::Source source) const
-{
-    if (source == Task::Source::Unspecified)
-        return false;
-    if (static_cast<size_t>(to_underlying(source)) < m_blocked_task_sources.size())
-        return m_blocked_task_sources[to_underlying(source)];
-    return false;
-}
-
-void EventLoop::block_task_source(Task::Source source)
-{
-    if (source == Task::Source::Unspecified)
-        return;
-    if (static_cast<size_t>(to_underlying(source)) < m_blocked_task_sources.size())
-        m_blocked_task_sources[to_underlying(source)] = true;
-}
-
-void EventLoop::unblock_task_source(Task::Source source)
-{
-    if (source == Task::Source::Unspecified)
-        return;
-    if (static_cast<size_t>(to_underlying(source)) < m_blocked_task_sources.size())
-        m_blocked_task_sources[to_underlying(source)] = false;
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#spin-the-event-loop
@@ -147,13 +117,11 @@ void EventLoop::spin_processing_tasks_with_source_until(Task::Source source, JS:
                 return task.source() == source && task.is_runnable();
             });
 
-            block_task_source(source);
             for (auto& task : tasks) {
                 m_currently_running_task = task.ptr();
                 task->execute();
                 m_currently_running_task = nullptr;
             }
-            unblock_task_source(source);
         }
 
         // FIXME: Remove the platform event loop plugin so that this doesn't look out of place
@@ -179,10 +147,7 @@ void EventLoop::process()
     // 1. Let oldestTask be null.
     JS::GCPtr<Task> oldest_task;
 
-    // 2. Let taskStartTime be the current high resolution time.
-    // FIXME: 'current high resolution time' in hr-time-3 takes a global object,
-    //        the HTML spec has not been updated to reflect this, let's use the shared timer.
-    //        - https://github.com/whatwg/html/issues/7776
+    // 2. Set taskStartTime to the unsafe shared current time.
     double task_start_time = HighResolutionTime::unsafe_shared_current_time();
 
     // 3. Let taskQueue be one of the event loop's task queues, chosen in an implementation-defined manner,
@@ -194,8 +159,6 @@ void EventLoop::process()
     oldest_task = task_queue.take_first_runnable();
 
     if (oldest_task) {
-        block_task_source(oldest_task->source());
-
         // 5. Set the event loop's currently running task to oldestTask.
         m_currently_running_task = oldest_task.ptr();
 
@@ -204,8 +167,6 @@ void EventLoop::process()
 
         // 7. Set the event loop's currently running task back to null.
         m_currently_running_task = nullptr;
-
-        unblock_task_source(oldest_task->source());
     }
 
     // 8. Microtasks: Perform a microtask checkpoint.
@@ -366,7 +327,10 @@ void EventLoop::process()
         if (navigable && navigable->needs_repaint()) {
             auto* browsing_context = document.browsing_context();
             auto& page = browsing_context->page();
-            page.client().schedule_repaint();
+            if (navigable->is_traversable()) {
+                VERIFY(page.client().is_ready_to_paint());
+                page.client().paint_next_frame();
+            }
         }
     });
 
@@ -377,7 +341,7 @@ void EventLoop::process()
     // - hasARenderingOpportunity is false
     // FIXME: has_a_rendering_opportunity is always true
     if (m_type == Type::Window && !task_queue.has_runnable_tasks() && m_microtask_queue->is_empty() /*&& !has_a_rendering_opportunity*/) {
-        // 1. Set this event loop's last idle period start time to the current high resolution time.
+        // 1. Set this event loop's last idle period start time to the unsafe shared current time.
         m_last_idle_period_start_time = HighResolutionTime::unsafe_shared_current_time();
 
         // 2. Let computeDeadline be the following steps:
@@ -408,8 +372,33 @@ void EventLoop::process()
     });
 }
 
+// https://html.spec.whatwg.org/multipage/webappapis.html#queue-a-task
+int queue_a_task(HTML::Task::Source source, JS::GCPtr<EventLoop> event_loop, JS::GCPtr<DOM::Document> document, JS::NonnullGCPtr<JS::HeapFunction<void()>> steps)
+{
+    // 1. If event loop was not given, set event loop to the implied event loop.
+    if (!event_loop)
+        event_loop = main_thread_event_loop();
+
+    // FIXME: 2. If document was not given, set document to the implied document.
+
+    // 3. Let task be a new task.
+    // 4. Set task's steps to steps.
+    // 5. Set task's source to source.
+    // 6. Set task's document to the document.
+    // 7. Set task's script evaluation environment settings object set to an empty set.
+    auto task = HTML::Task::create(event_loop->vm(), source, document, steps);
+
+    // 8. Let queue be the task queue to which source is associated on event loop.
+    auto& queue = event_loop->task_queue();
+
+    // 9. Append task to queue.
+    queue.add(task);
+
+    return queue.last_added_task()->id();
+}
+
 // https://html.spec.whatwg.org/multipage/webappapis.html#queue-a-global-task
-int queue_global_task(HTML::Task::Source source, JS::Object& global_object, Function<void()> steps)
+int queue_global_task(HTML::Task::Source source, JS::Object& global_object, JS::NonnullGCPtr<JS::HeapFunction<void()>> steps)
 {
     // 1. Let event loop be global's relevant agent's event loop.
     auto& global_custom_data = verify_cast<Bindings::WebEngineCustomData>(*global_object.vm().custom_data());
@@ -423,14 +412,11 @@ int queue_global_task(HTML::Task::Source source, JS::Object& global_object, Func
     }
 
     // 3. Queue a task given source, event loop, document, and steps.
-    auto& vm = global_object.vm();
-    event_loop->task_queue().add(HTML::Task::create(vm, source, document, JS::create_heap_function(vm.heap(), move(steps))));
-
-    return event_loop->task_queue().last_added_task()->id();
+    return queue_a_task(source, *event_loop, document, steps);
 }
 
 // https://html.spec.whatwg.org/#queue-a-microtask
-void queue_a_microtask(DOM::Document const* document, Function<void()> steps)
+void queue_a_microtask(DOM::Document const* document, JS::NonnullGCPtr<JS::HeapFunction<void()>> steps)
 {
     // 1. If event loop was not given, set event loop to the implied event loop.
     auto& event_loop = HTML::main_thread_event_loop();
@@ -442,7 +428,7 @@ void queue_a_microtask(DOM::Document const* document, Function<void()> steps)
     // 5. Set microtask's source to the microtask task source.
     // 6. Set microtask's document to document.
     auto& vm = event_loop.vm();
-    auto microtask = HTML::Task::create(vm, HTML::Task::Source::Microtask, document, JS::create_heap_function(vm.heap(), move(steps)));
+    auto microtask = HTML::Task::create(vm, HTML::Task::Source::Microtask, document, steps);
 
     // FIXME: 7. Set microtask's script evaluation environment settings object set to an empty set.
 

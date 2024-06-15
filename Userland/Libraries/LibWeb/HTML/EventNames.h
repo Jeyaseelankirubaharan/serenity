@@ -31,6 +31,7 @@ namespace Web::HTML::EventNames {
     __ENUMERATE_HTML_EVENT(change)                   \
     __ENUMERATE_HTML_EVENT(click)                    \
     __ENUMERATE_HTML_EVENT(close)                    \
+    __ENUMERATE_HTML_EVENT(complete)                 \
     __ENUMERATE_HTML_EVENT(connect)                  \
     __ENUMERATE_HTML_EVENT(contextmenu)              \
     __ENUMERATE_HTML_EVENT(copy)                     \
@@ -64,6 +65,9 @@ namespace Web::HTML::EventNames {
     __ENUMERATE_HTML_EVENT(loadend)                  \
     __ENUMERATE_HTML_EVENT(loadeddata)               \
     __ENUMERATE_HTML_EVENT(loadedmetadata)           \
+    __ENUMERATE_HTML_EVENT(loading)                  \
+    __ENUMERATE_HTML_EVENT(loadingdone)              \
+    __ENUMERATE_HTML_EVENT(loadingerror)             \
     __ENUMERATE_HTML_EVENT(loadstart)                \
     __ENUMERATE_HTML_EVENT(message)                  \
     __ENUMERATE_HTML_EVENT(messageerror)             \

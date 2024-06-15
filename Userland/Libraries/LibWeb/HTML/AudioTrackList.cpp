@@ -44,12 +44,10 @@ JS::ThrowCompletionOr<Optional<JS::PropertyDescriptor>> AudioTrackList::internal
     return Base::internal_get_own_property(property_name);
 }
 
-ErrorOr<void> AudioTrackList::add_track(Badge<HTMLMediaElement>, JS::NonnullGCPtr<AudioTrack> audio_track)
+void AudioTrackList::add_track(Badge<HTMLMediaElement>, JS::NonnullGCPtr<AudioTrack> audio_track)
 {
-    TRY(m_audio_tracks.try_append(audio_track));
+    m_audio_tracks.append(audio_track);
     audio_track->set_audio_track_list({}, this);
-
-    return {};
 }
 
 void AudioTrackList::remove_all_tracks(Badge<HTMLMediaElement>)
@@ -122,8 +120,7 @@ WebIDL::CallbackType* AudioTrackList::onremovetrack()
 void AudioTrackList::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto const& track : m_audio_tracks)
-        visitor.visit(track);
+    visitor.visit(m_audio_tracks);
 }
 
 }

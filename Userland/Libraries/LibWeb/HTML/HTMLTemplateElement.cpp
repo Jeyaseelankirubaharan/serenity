@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLTemplateElementPrototype.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/HTML/HTMLTemplateElement.h>
@@ -57,6 +58,8 @@ void HTMLTemplateElement::cloned(Node& copy, bool clone_children)
 
         // FIXME: Should this use TreeNode::append_child instead?
         MUST(template_clone.content()->append_child(cloned_child));
+
+        return IterationDecision::Continue;
     });
 }
 

@@ -143,7 +143,7 @@ public:
     WebIDL::ExceptionOr<void> show_picker();
 
     // ^DOM::EditableTextNodeOwner
-    virtual void did_edit_text_node(Badge<BrowsingContext>) override;
+    virtual void did_edit_text_node(Badge<Navigable>) override;
 
     // ^EventTarget
     // https://html.spec.whatwg.org/multipage/interaction.html#the-tabindex-attribute:the-input-element
@@ -208,7 +208,9 @@ private:
 
     // ^DOM::Element
     virtual i32 default_tab_index_value() const override;
-    virtual void apply_presentational_hints(CSS::StyleProperties&) const override;
+
+    // https://html.spec.whatwg.org/multipage/input.html#image-button-state-(type=image):dimension-attributes
+    virtual bool supports_dimension_attributes() const override { return type_state() == TypeAttributeState::ImageButton; }
 
     // ^Layout::ImageProvider
     virtual bool is_image_available() const override;

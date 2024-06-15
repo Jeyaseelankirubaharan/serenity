@@ -6,6 +6,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/HTMLSelectElementPrototype.h>
 #include <LibWeb/Bindings/Intrinsics.h>
 #include <LibWeb/CSS/StyleValues/DisplayStyleValue.h>
 #include <LibWeb/DOM/Document.h>
@@ -173,12 +174,15 @@ Vector<JS::Handle<HTMLOptionElement>> HTMLSelectElement::list_of_options() const
 
     for_each_child_of_type<HTMLOptionElement>([&](HTMLOptionElement& option_element) {
         list.append(JS::make_handle(option_element));
+        return IterationDecision::Continue;
     });
 
     for_each_child_of_type<HTMLOptGroupElement>([&](HTMLOptGroupElement const& optgroup_element) {
         optgroup_element.for_each_child_of_type<HTMLOptionElement>([&](HTMLOptionElement& option_element) {
             list.append(JS::make_handle(option_element));
+            return IterationDecision::Continue;
         });
+        return IterationDecision::Continue;
     });
 
     return list;

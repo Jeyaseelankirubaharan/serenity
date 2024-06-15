@@ -16,9 +16,9 @@
 #include <LibTextCodec/Decoder.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Fetch/FetchMethod.h>
-#include <LibWeb/Forward.h>
 #include <LibWeb/HTML/CanvasRenderingContext2D.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
+#include <LibWeb/HTML/EventSource.h>
 #include <LibWeb/HTML/ImageBitmap.h>
 #include <LibWeb/HTML/Scripting/ClassicScript.h>
 #include <LibWeb/HTML/Scripting/Environments.h>
@@ -30,6 +30,7 @@
 #include <LibWeb/HTML/WindowOrWorkerGlobalScope.h>
 #include <LibWeb/HighResolutionTime/Performance.h>
 #include <LibWeb/HighResolutionTime/SupportedPerformanceTypes.h>
+#include <LibWeb/IndexedDB/IDBFactory.h>
 #include <LibWeb/Infra/Base64.h>
 #include <LibWeb/PerformanceTimeline/EntryTypes.h>
 #include <LibWeb/PerformanceTimeline/PerformanceObserver.h>
@@ -65,12 +66,12 @@ void WindowOrWorkerGlobalScopeMixin::visit_edges(JS::Cell::Visitor& visitor)
 {
     visitor.visit(m_performance);
     visitor.visit(m_supported_entry_types_array);
-    for (auto& it : m_timers)
-        visitor.visit(it.value);
-    for (auto& observer : m_registered_performance_observer_objects)
-        visitor.visit(observer);
+    visitor.visit(m_timers);
+    visitor.visit(m_registered_performance_observer_objects);
+    visitor.visit(m_indexed_db);
     for (auto& entry : m_performance_entry_buffer_map)
         entry.value.visit_edges(visitor);
+    visitor.visit(m_registered_event_sources);
 }
 
 void WindowOrWorkerGlobalScopeMixin::finalize()
@@ -152,11 +153,11 @@ void WindowOrWorkerGlobalScopeMixin::queue_microtask(WebIDL::CallbackType& callb
         document = &static_cast<Window&>(this_impl()).associated_document();
 
     // The queueMicrotask(callback) method must queue a microtask to invoke callback, and if callback throws an exception, report the exception.
-    HTML::queue_a_microtask(document, [&callback, &realm] {
+    HTML::queue_a_microtask(document, JS::create_heap_function(realm.heap(), [&callback, &realm] {
         auto result = WebIDL::invoke_callback(callback, {});
         if (result.is_error())
             HTML::report_exception(result, realm);
-    });
+    }));
 }
 
 // https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#dom-createimagebitmap
@@ -205,7 +206,7 @@ JS::NonnullGCPtr<JS::Promise> WindowOrWorkerGlobalScopeMixin::create_image_bitma
     image.visit(
         [&](JS::Handle<FileAPI::Blob>& blob) {
             // Run these step in parallel:
-            Platform::EventLoopPlugin::the().deferred_invoke([=, this]() {
+            Platform::EventLoopPlugin::the().deferred_invoke([=]() {
                 // 1. Let imageData be the result of reading image's data. If an error occurs during reading of the
                 // object, then reject p with an "InvalidStateError" DOMException and abort these steps.
                 // FIXME: I guess this is always fine for us as the data is already read.
@@ -215,24 +216,27 @@ JS::NonnullGCPtr<JS::Promise> WindowOrWorkerGlobalScopeMixin::create_image_bitma
                 // 2. Apply the image sniffing rules to determine the file format of imageData, with MIME type of
                 // image (as given by image's type attribute) giving the official type.
 
-                // 3. If imageData is not in a supported image file format (e.g., it's not an image at all), or if
-                // imageData is corrupted in some fatal way such that the image dimensions cannot be obtained
-                // (e.g., a vector graphic with no natural size), then reject p with an "InvalidStateError" DOMException
-                // and abort these steps.
-                auto result = Web::Platform::ImageCodecPlugin::the().decode_image(image_data);
-                if (!result.has_value()) {
-                    p->reject(WebIDL::InvalidStateError::create(this_impl().realm(), "image does not contain a supported image format"_string));
-                    return;
-                }
+                auto on_failed_decode = [p = JS::Handle(*p)](Error&) {
+                    // 3. If imageData is not in a supported image file format (e.g., it's not an image at all), or if
+                    // imageData is corrupted in some fatal way such that the image dimensions cannot be obtained
+                    // (e.g., a vector graphic with no natural size), then reject p with an "InvalidStateError" DOMException
+                    // and abort these steps.
+                    p->reject(WebIDL::InvalidStateError::create(relevant_realm(*p), "image does not contain a supported image format"_string));
+                };
 
-                // 4. Set imageBitmap's bitmap data to imageData, cropped to the source rectangle with formatting.
-                // If this is an animated image, imageBitmap's bitmap data must only be taken from the default image
-                // of the animation (the one that the format defines is to be used when animation is not supported
-                // or is disabled), or, if there is no such image, the first frame of the animation.
-                image_bitmap->set_bitmap(result.value().frames.take_first().bitmap);
+                auto on_successful_decode = [image_bitmap = JS::Handle(*image_bitmap), p = JS::Handle(*p)](Web::Platform::DecodedImage& result) -> ErrorOr<void> {
+                    // 4. Set imageBitmap's bitmap data to imageData, cropped to the source rectangle with formatting.
+                    // If this is an animated image, imageBitmap's bitmap data must only be taken from the default image
+                    // of the animation (the one that the format defines is to be used when animation is not supported
+                    // or is disabled), or, if there is no such image, the first frame of the animation.
+                    image_bitmap->set_bitmap(result.frames.take_first().bitmap);
 
-                // 5. Resolve p with imageBitmap.
-                p->fulfill(image_bitmap);
+                    // 5. Resolve p with imageBitmap.
+                    p->fulfill(image_bitmap);
+                    return {};
+                };
+
+                (void)Web::Platform::ImageCodecPlugin::the().decode_image(image_data, move(on_successful_decode), move(on_failed_decode));
             });
         },
         [&](auto&) {
@@ -398,9 +402,9 @@ i32 WindowOrWorkerGlobalScopeMixin::run_timer_initialization_steps(TimerHandler 
 
     // 11. Let completionStep be an algorithm step which queues a global task on the timer task source given global to run task.
     Function<void()> completion_step = [this, task = move(task)]() mutable {
-        queue_global_task(Task::Source::TimerTask, this_impl(), [task] {
+        queue_global_task(Task::Source::TimerTask, this_impl(), JS::create_heap_function(this_impl().heap(), [task] {
             task->function()();
-        });
+        }));
     };
 
     // 12. Run steps after a timeout given global, "setTimeout/setInterval", timeout, completionStep, and id.
@@ -567,7 +571,7 @@ void WindowOrWorkerGlobalScopeMixin::queue_the_performance_observer_task()
 
     // 3. Queue a task that consists of running the following substeps. The task source for the queued task is the performance
     //    timeline task source.
-    queue_global_task(Task::Source::PerformanceTimeline, this_impl(), [this]() {
+    queue_global_task(Task::Source::PerformanceTimeline, this_impl(), JS::create_heap_function(this_impl().heap(), [this]() {
         auto& realm = this_impl().realm();
 
         // 1. Unset performance observer task queued flag of relevantGlobal.
@@ -644,7 +648,23 @@ void WindowOrWorkerGlobalScopeMixin::queue_the_performance_observer_task()
             if (completion.is_abrupt())
                 HTML::report_exception(completion, realm);
         }
-    });
+    }));
+}
+
+void WindowOrWorkerGlobalScopeMixin::register_event_source(Badge<EventSource>, JS::NonnullGCPtr<EventSource> event_source)
+{
+    m_registered_event_sources.set(event_source);
+}
+
+void WindowOrWorkerGlobalScopeMixin::unregister_event_source(Badge<EventSource>, JS::NonnullGCPtr<EventSource> event_source)
+{
+    m_registered_event_sources.remove(event_source);
+}
+
+void WindowOrWorkerGlobalScopeMixin::forcibly_close_all_event_sources()
+{
+    for (auto event_source : m_registered_event_sources)
+        event_source->forcibly_close();
 }
 
 // https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#run-steps-after-a-timeout
@@ -686,6 +706,16 @@ JS::NonnullGCPtr<HighResolutionTime::Performance> WindowOrWorkerGlobalScopeMixin
     if (!m_performance)
         m_performance = this_impl().heap().allocate<HighResolutionTime::Performance>(realm, realm);
     return JS::NonnullGCPtr { *m_performance };
+}
+
+JS::NonnullGCPtr<IndexedDB::IDBFactory> WindowOrWorkerGlobalScopeMixin::indexed_db()
+{
+    auto& vm = this_impl().vm();
+    auto& realm = this_impl().realm();
+
+    if (!m_indexed_db)
+        m_indexed_db = vm.heap().allocate<IndexedDB::IDBFactory>(realm, realm);
+    return *m_indexed_db;
 }
 
 // https://w3c.github.io/performance-timeline/#dfn-frozen-array-of-supported-entry-types

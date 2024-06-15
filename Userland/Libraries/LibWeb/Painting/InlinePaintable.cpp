@@ -30,27 +30,6 @@ Layout::InlineNode const& InlinePaintable::layout_node() const
     return static_cast<Layout::InlineNode const&>(Paintable::layout_node());
 }
 
-Optional<int> InlinePaintable::scroll_frame_id() const
-{
-    if (m_enclosing_scroll_frame)
-        return m_enclosing_scroll_frame->id;
-    return {};
-}
-
-Optional<CSSPixelPoint> InlinePaintable::enclosing_scroll_frame_offset() const
-{
-    if (m_enclosing_scroll_frame)
-        return m_enclosing_scroll_frame->offset;
-    return {};
-}
-
-Optional<CSSPixelRect> InlinePaintable::clip_rect() const
-{
-    if (m_enclosing_clip_frame)
-        return m_enclosing_clip_frame->rect();
-    return {};
-}
-
 void InlinePaintable::before_paint(PaintContext& context, PaintPhase) const
 {
     if (scroll_frame_id().has_value()) {
@@ -91,6 +70,9 @@ void InlinePaintable::paint(PaintContext& context, PaintPhase phase) const
                 auto extra_end_width = box_model().padding.right;
                 absolute_fragment_rect.set_width(absolute_fragment_rect.width() + extra_end_width);
             }
+
+            absolute_fragment_rect.translate_by(0, -box_model().padding.top);
+            absolute_fragment_rect.set_height(absolute_fragment_rect.height() + box_model().padding.top + box_model().padding.bottom);
 
             auto const& border_radii_data = fragment.border_radii_data();
             paint_background(context, layout_node(), absolute_fragment_rect, computed_values().background_color(), computed_values().image_rendering(), &computed_values().background_layers(), border_radii_data);
@@ -137,6 +119,9 @@ void InlinePaintable::paint(PaintContext& context, PaintPhase phase) const
                 absolute_fragment_rect.set_width(absolute_fragment_rect.width() + extra_end_width);
             }
 
+            absolute_fragment_rect.translate_by(0, -box_model().padding.top);
+            absolute_fragment_rect.set_height(absolute_fragment_rect.height() + box_model().padding.top + box_model().padding.bottom);
+
             auto borders_rect = absolute_fragment_rect.inflated(borders_data.top.width, borders_data.right.width, borders_data.bottom.width, borders_data.left.width);
             auto border_radii_data = fragment.border_radii_data();
 
@@ -156,9 +141,9 @@ void InlinePaintable::paint(PaintContext& context, PaintPhase phase) const
 
                 border_radii_data.inflate(outline_data->top.width + outline_offset_y, outline_data->right.width + outline_offset_x, outline_data->bottom.width + outline_offset_y, outline_data->left.width + outline_offset_x);
                 borders_rect.inflate(outline_data->top.width + outline_offset_y, outline_data->right.width + outline_offset_x, outline_data->bottom.width + outline_offset_y, outline_data->left.width + outline_offset_x);
-                context.recording_painter().paint_borders(context.rounded_device_rect(borders_rect), border_radii_data.as_corners(context), outline_data->to_device_pixels(context));
+                paint_all_borders(context.recording_painter(), context.rounded_device_rect(borders_rect), border_radii_data.as_corners(context), outline_data->to_device_pixels(context));
             } else {
-                context.recording_painter().paint_borders(context.rounded_device_rect(borders_rect), border_radii_data.as_corners(context), borders_data.to_device_pixels(context));
+                paint_all_borders(context.recording_painter(), context.rounded_device_rect(borders_rect), border_radii_data.as_corners(context), borders_data.to_device_pixels(context));
             }
 
             return IterationDecision::Continue;
@@ -204,7 +189,7 @@ void InlinePaintable::for_each_fragment(Callback callback) const
 
 TraversalDecision InlinePaintable::hit_test(CSSPixelPoint position, HitTestType type, Function<TraversalDecision(HitTestResult)> const& callback) const
 {
-    if (m_clip_rect.has_value() && !m_clip_rect.value().contains(position))
+    if (clip_rect().has_value() && !clip_rect().value().contains(position))
         return TraversalDecision::Continue;
 
     auto position_adjusted_by_scroll_offset = position;
@@ -226,12 +211,13 @@ TraversalDecision InlinePaintable::hit_test(CSSPixelPoint position, HitTestType 
 
     bool should_exit = false;
     for_each_child([&](Paintable const& child) {
-        if (should_exit)
-            return;
         if (child.stacking_context())
-            return;
-        if (child.hit_test(position, type, callback) == TraversalDecision::Break)
+            return IterationDecision::Continue;
+        if (child.hit_test(position, type, callback) == TraversalDecision::Break) {
             should_exit = true;
+            return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
     });
 
     if (should_exit)

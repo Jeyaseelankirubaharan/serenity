@@ -106,8 +106,7 @@ void Node::visit_edges(Cell::Visitor& visitor)
     visitor.visit(m_paintable);
 
     if (m_registered_observer_list) {
-        for (auto& registered_observer : *m_registered_observer_list)
-            visitor.visit(registered_observer);
+        visitor.visit(*m_registered_observer_list);
     }
 }
 
@@ -150,7 +149,7 @@ String Node::descendant_text_content() const
     StringBuilder builder;
     for_each_in_subtree_of_type<Text>([&](auto& text_node) {
         builder.append(text_node.data());
-        return IterationDecision::Continue;
+        return TraversalDecision::Continue;
     });
     return builder.to_string_without_validation();
 }
@@ -205,8 +204,10 @@ void Node::set_text_content(Optional<String> const& maybe_content)
 
     // Otherwise, do nothing.
 
-    document().invalidate_style();
-    document().invalidate_layout();
+    if (is_connected()) {
+        document().invalidate_style();
+        document().invalidate_layout();
+    }
 
     document().bump_dom_tree_version();
 }
@@ -280,7 +281,7 @@ void Node::invalidate_style()
             if (shadow_root->has_children())
                 shadow_root->m_child_needs_style_update = true;
         }
-        return IterationDecision::Continue;
+        return TraversalDecision::Continue;
     });
     for (auto* ancestor = parent_or_shadow_host(); ancestor; ancestor = ancestor->parent_or_shadow_host())
         ancestor->m_child_needs_style_update = true;
@@ -299,6 +300,7 @@ String Node::child_text_content() const
             if (maybe_content.has_value())
                 builder.append(maybe_content.value());
         }
+        return IterationDecision::Continue;
     });
     return MUST(builder.to_string());
 }
@@ -332,6 +334,13 @@ bool Node::is_connected() const
 {
     // An element is connected if its shadow-including root is a document.
     return shadow_including_root().is_document();
+}
+
+// https://html.spec.whatwg.org/multipage/infrastructure.html#browsing-context-connected
+bool Node::is_browsing_context_connected() const
+{
+    // A node is browsing-context connected when it is connected and its shadow-including root's browsing context is non-null.
+    return is_connected() && shadow_including_root().document().browsing_context();
 }
 
 // https://dom.spec.whatwg.org/#concept-node-ensure-pre-insertion-validity
@@ -498,7 +507,7 @@ void Node::insert_before(JS::NonnullGCPtr<Node> node, JS::GCPtr<Node> child, boo
                 }
             }
 
-            return IterationDecision::Continue;
+            return TraversalDecision::Continue;
         });
     }
 
@@ -510,10 +519,11 @@ void Node::insert_before(JS::NonnullGCPtr<Node> node, JS::GCPtr<Node> child, boo
     // 9. Run the children changed steps for parent.
     children_changed();
 
-    // FIXME: This will need to become smarter when we implement the :has() selector.
-    invalidate_style();
-
-    document().invalidate_layout();
+    if (is_connected()) {
+        // FIXME: This will need to become smarter when we implement the :has() selector.
+        invalidate_style();
+        document().invalidate_layout();
+    }
 
     document().bump_dom_tree_version();
 }
@@ -569,6 +579,8 @@ WebIDL::ExceptionOr<JS::NonnullGCPtr<Node>> Node::append_child(JS::NonnullGCPtr<
 // https://dom.spec.whatwg.org/#concept-node-remove
 void Node::remove(bool suppress_observers)
 {
+    bool was_connected = is_connected();
+
     // 1. Let parent be node’s parent
     auto* parent = this->parent();
 
@@ -634,7 +646,7 @@ void Node::remove(bool suppress_observers)
 
     for_each_in_inclusive_subtree_of_type<HTML::HTMLSlotElement>([&](auto const&) {
         has_descendent_slot = true;
-        return IterationDecision::Break;
+        return TraversalDecision::Break;
     });
 
     if (has_descendent_slot) {
@@ -680,7 +692,7 @@ void Node::remove(bool suppress_observers)
             }
         }
 
-        return IterationDecision::Continue;
+        return TraversalDecision::Continue;
     });
 
     // 19. For each inclusive ancestor inclusiveAncestor of parent, and then for each registered of inclusiveAncestor’s registered observer list,
@@ -705,10 +717,12 @@ void Node::remove(bool suppress_observers)
     // 21. Run the children changed steps for parent.
     parent->children_changed();
 
-    // Since the tree structure has changed, we need to invalidate both style and layout.
-    // In the future, we should find a way to only invalidate the parts that actually need it.
-    document().invalidate_style();
-    document().invalidate_layout();
+    if (was_connected) {
+        // Since the tree structure has changed, we need to invalidate both style and layout.
+        // In the future, we should find a way to only invalidate the parts that actually need it.
+        document().invalidate_style();
+        document().invalidate_layout();
+    }
 
     document().bump_dom_tree_version();
 }
@@ -820,7 +834,7 @@ JS::NonnullGCPtr<Node> Node::clone_node(Document* document, bool clone_children)
         element.for_each_attribute([&](auto& name, auto& value) {
             // 1. Let copyAttribute be a clone of attribute.
             // 2. Append copyAttribute to copy.
-            MUST(element_copy->set_attribute(name, value));
+            element_copy->append_attribute(name, value);
         });
         copy = move(element_copy);
 
@@ -890,6 +904,7 @@ JS::NonnullGCPtr<Node> Node::clone_node(Document* document, bool clone_children)
     if (clone_children) {
         for_each_child([&](auto& child) {
             MUST(copy->append_child(child.clone_node(document, true)));
+            return IterationDecision::Continue;
         });
     }
 
@@ -1019,6 +1034,7 @@ Vector<JS::Handle<Node>> Node::children_as_vector() const
 
     for_each_child([&](auto& child) {
         nodes.append(JS::make_handle(child));
+        return IterationDecision::Continue;
     });
 
     return nodes;
@@ -1210,10 +1226,11 @@ void Node::serialize_tree_as_json(JsonObjectSerializer<StringBuilder>& object) c
         auto children = MUST(object.add_array("children"sv));
         auto add_child = [&children](DOM::Node const& child) {
             if (child.is_uninteresting_whitespace_node())
-                return;
+                return IterationDecision::Continue;
             JsonObjectSerializer<StringBuilder> child_object = MUST(children.add_object());
             child.serialize_tree_as_json(child_object);
             MUST(child_object.finish());
+            return IterationDecision::Continue;
         };
         for_each_child(add_child);
 
@@ -1728,6 +1745,7 @@ void Node::build_accessibility_tree(AccessibilityTreeNode& parent)
             if (document_element->has_child_nodes())
                 document_element->for_each_child([&parent](DOM::Node& child) {
                     child.build_accessibility_tree(parent);
+                    return IterationDecision::Continue;
                 });
         }
     } else if (is_element()) {
@@ -1742,11 +1760,13 @@ void Node::build_accessibility_tree(AccessibilityTreeNode& parent)
             if (has_child_nodes()) {
                 for_each_child([&current_node](DOM::Node& child) {
                     child.build_accessibility_tree(*current_node);
+                    return IterationDecision::Continue;
                 });
             }
         } else if (has_child_nodes()) {
             for_each_child([&parent](DOM::Node& child) {
                 child.build_accessibility_tree(parent);
+                return IterationDecision::Continue;
             });
         }
     } else if (is_text()) {
@@ -1754,6 +1774,7 @@ void Node::build_accessibility_tree(AccessibilityTreeNode& parent)
         if (has_child_nodes()) {
             for_each_child([&parent](DOM::Node& child) {
                 child.build_accessibility_tree(parent);
+                return IterationDecision::Continue;
             });
         }
     }
@@ -1852,7 +1873,7 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
             element->for_each_child([&total_accumulated_text, current_node, target, &document, &visited_nodes](
                                         DOM::Node const& child_node) mutable {
                 if (visited_nodes.contains(child_node.unique_id()))
-                    return;
+                    return IterationDecision::Continue;
 
                 // a. Set the current node to the child node.
                 current_node = &child_node;
@@ -1862,6 +1883,8 @@ ErrorOr<String> Node::name_or_description(NameOrDescription target, Document con
 
                 // c. Append the result to the accumulated text.
                 total_accumulated_text.append(result);
+
+                return IterationDecision::Continue;
             });
             // iv. Return the accumulated text.
             return total_accumulated_text.to_string();

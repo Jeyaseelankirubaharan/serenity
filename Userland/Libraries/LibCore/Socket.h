@@ -134,6 +134,7 @@ public:
     ErrorOr<size_t> write(ReadonlyBytes, int flags);
 
     bool is_eof() const { return !is_open() || m_last_read_was_eof; }
+    void did_reach_eof_on_read();
     bool is_open() const { return m_fd != -1; }
     void close();
 
@@ -328,6 +329,10 @@ public:
 
     ErrorOr<int> receive_fd(int flags);
     ErrorOr<void> send_fd(int fd);
+
+    ErrorOr<Bytes> receive_message(Bytes buffer, int flags, Vector<int>& fds);
+    ErrorOr<ssize_t> send_message(ReadonlyBytes msg, int flags, Vector<int, 1> fds = {});
+
     ErrorOr<pid_t> peer_pid() const;
     ErrorOr<Bytes> read_without_waiting(Bytes buffer);
 

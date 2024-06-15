@@ -64,7 +64,6 @@ compiled_action("generate_window_or_worker_interfaces") {
   inputs = standard_idl_files + iterable_idl_files + namespace_idl_files +
            global_idl_files
   outputs = [
-    "$target_gen_dir/Bindings/Forward.h",
     "$target_gen_dir/Bindings/IntrinsicDefinitions.cpp",
     "$target_gen_dir/Bindings/DedicatedWorkerExposedInterfaces.cpp",
     "$target_gen_dir/Bindings/DedicatedWorkerExposedInterfaces.h",
@@ -327,6 +326,7 @@ shared_library("LibWeb") {
            "Geometry",
            "HTML",
            "HighResolutionTime",
+           "IndexedDB",
            "Infra",
            "Internals",
            "IntersectionObserver",
@@ -334,6 +334,7 @@ shared_library("LibWeb") {
            "Loader",
            "MathML",
            "MimeSniff",
+           "MixedContent",
            "NavigationTiming",
            "Page",
            "Painting",
@@ -351,6 +352,7 @@ shared_library("LibWeb") {
            "UIEvents",
            "UserTiming",
            "WebAssembly",
+           "WebAudio",
            "WebDriver",
            "WebGL",
            "WebIDL",

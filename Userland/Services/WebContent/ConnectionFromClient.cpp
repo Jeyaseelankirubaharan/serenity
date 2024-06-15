@@ -156,6 +156,18 @@ void ConnectionFromClient::load_html(u64 page_id, ByteString const& html)
         page->page().load_html(html);
 }
 
+void ConnectionFromClient::reload(u64 page_id)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->page().reload();
+}
+
+void ConnectionFromClient::traverse_the_history_by_delta(u64 page_id, i32 delta)
+{
+    if (auto page = this->page(page_id); page.has_value())
+        page->page().traverse_the_history_by_delta(delta);
+}
+
 void ConnectionFromClient::set_viewport_rect(u64 page_id, Web::DevicePixelRect const& rect)
 {
     if (auto page = this->page(page_id); page.has_value())
@@ -431,7 +443,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, i32 node_id, Optional<W
         if (ctx.active_document() != nullptr) {
             ctx.active_document()->set_inspected_node(nullptr, {});
         }
-        return IterationDecision::Continue;
+        return Web::TraversalDecision::Continue;
     });
 
     Web::DOM::Node* node = Web::DOM::Node::from_unique_id(node_id);
@@ -540,7 +552,7 @@ void ConnectionFromClient::inspect_dom_node(u64 page_id, i32 node_id, Optional<W
             // FIXME: Pseudo-elements only exist as Layout::Nodes, which don't have style information
             //        in a format we can use. So, we run the StyleComputer again to get the specified
             //        values, and have to ignore the computed values and custom properties.
-            auto pseudo_element_style = page->page().focused_context().active_document()->style_computer().compute_style(element, pseudo_element);
+            auto pseudo_element_style = page->page().focused_navigable().active_document()->style_computer().compute_style(element, pseudo_element);
             ByteString computed_values = serialize_json(pseudo_element_style);
             ByteString resolved_values = "{}";
             ByteString custom_properties_json = serialize_custom_properties_json(element, pseudo_element);
@@ -731,11 +743,6 @@ void ConnectionFromClient::remove_dom_node(u64 page_id, i32 node_id)
 
     dom_node->remove();
 
-    // FIXME: When nodes are removed from the DOM, the associated layout nodes become stale and still
-    //        remain in the layout tree. This has to be fixed, this just causes everything to be recomputed
-    //        which really hurts performance.
-    active_document->force_layout();
-
     async_did_finish_editing_dom_node(page_id, previous_dom_node->unique_id());
 }
 
@@ -810,20 +817,47 @@ Messages::WebContentServer::DumpGcGraphResponse ConnectionFromClient::dump_gc_gr
 Messages::WebContentServer::GetSelectedTextResponse ConnectionFromClient::get_selected_text(u64 page_id)
 {
     if (auto page = this->page(page_id); page.has_value())
-        return page->page().focused_context().selected_text().to_byte_string();
+        return page->page().focused_navigable().selected_text().to_byte_string();
     return ByteString {};
 }
 
 void ConnectionFromClient::select_all(u64 page_id)
 {
     if (auto page = this->page(page_id); page.has_value())
-        page->page().focused_context().select_all();
+        page->page().focused_navigable().select_all();
+}
+
+void ConnectionFromClient::find_in_page(u64 page_id, String const& query, CaseSensitivity case_sensitivity)
+{
+    auto page = this->page(page_id);
+    if (!page.has_value())
+        return;
+
+    page->page().find_in_page(query, case_sensitivity);
+}
+
+void ConnectionFromClient::find_in_page_next_match(u64 page_id)
+{
+    auto page = this->page(page_id);
+    if (!page.has_value())
+        return;
+
+    page->page().find_in_page_next_match();
+}
+
+void ConnectionFromClient::find_in_page_previous_match(u64 page_id)
+{
+    auto page = this->page(page_id);
+    if (!page.has_value())
+        return;
+
+    page->page().find_in_page_previous_match();
 }
 
 void ConnectionFromClient::paste(u64 page_id, String const& text)
 {
     if (auto page = this->page(page_id); page.has_value())
-        page->page().focused_context().paste(text);
+        page->page().focused_navigable().paste(text);
 }
 
 Messages::WebContentServer::DumpLayoutTreeResponse ConnectionFromClient::dump_layout_tree(u64 page_id)

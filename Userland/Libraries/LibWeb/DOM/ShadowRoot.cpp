@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibWeb/Bindings/ShadowRootPrototype.h>
 #include <LibWeb/DOM/AdoptedStyleSheets.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
@@ -33,6 +34,18 @@ void ShadowRoot::initialize(JS::Realm& realm)
 {
     Base::initialize(realm);
     WEB_SET_PROTOTYPE_FOR_INTERFACE(ShadowRoot);
+}
+
+// https://dom.spec.whatwg.org/#dom-shadowroot-onslotchange
+void ShadowRoot::set_onslotchange(WebIDL::CallbackType* event_handler)
+{
+    set_event_handler_attribute(HTML::EventNames::slotchange, event_handler);
+}
+
+// https://dom.spec.whatwg.org/#dom-shadowroot-onslotchange
+WebIDL::CallbackType* ShadowRoot::onslotchange()
+{
+    return event_handler_attribute(HTML::EventNames::slotchange);
 }
 
 // https://dom.spec.whatwg.org/#ref-for-get-the-parent%E2%91%A6
@@ -115,6 +128,16 @@ void ShadowRoot::for_each_css_style_sheet(Function<void(CSS::CSSStyleSheet&)>&& 
             callback(style_sheet);
         });
     }
+}
+
+Vector<JS::NonnullGCPtr<Animations::Animation>> ShadowRoot::get_animations()
+{
+    Vector<JS::NonnullGCPtr<Animations::Animation>> relevant_animations;
+    for_each_child_of_type<Element>([&](auto& child) {
+        relevant_animations.extend(child.get_animations({ .subtree = true }));
+        return IterationDecision::Continue;
+    });
+    return relevant_animations;
 }
 
 }

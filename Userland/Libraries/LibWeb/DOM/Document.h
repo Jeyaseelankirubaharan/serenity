@@ -110,6 +110,21 @@ public:
     String cookie(Cookie::Source = Cookie::Source::NonHttp);
     void set_cookie(StringView, Cookie::Source = Cookie::Source::NonHttp);
 
+    String fg_color() const;
+    void set_fg_color(String const&);
+
+    String link_color() const;
+    void set_link_color(String const&);
+
+    String vlink_color() const;
+    void set_vlink_color(String const&);
+
+    String alink_color() const;
+    void set_alink_color(String const&);
+
+    String bg_color() const;
+    void set_bg_color(String const&);
+
     String referrer() const;
     void set_referrer(String);
 
@@ -160,6 +175,10 @@ public:
     HTML::HTMLHtmlElement* html_element();
     HTML::HTMLHeadElement* head();
     JS::GCPtr<HTML::HTMLTitleElement> title_element();
+
+    StringView dir() const;
+    void set_dir(String const&);
+
     HTML::HTMLElement* body();
 
     HTML::HTMLHtmlElement const* html_element() const
@@ -198,16 +217,14 @@ public:
     Color background_color() const;
     Vector<CSS::BackgroundLayerData> const* background_layers() const;
 
-    Color link_color() const;
-    void set_link_color(Color);
+    Color normal_link_color() const;
+    void set_normal_link_color(Color);
 
     Color active_link_color() const;
     void set_active_link_color(Color);
 
     Color visited_link_color() const;
     void set_visited_link_color(Color);
-
-    void force_layout();
 
     void update_style();
     void update_layout();
@@ -242,6 +259,13 @@ public:
     JS::NonnullGCPtr<HTMLCollection> forms();
     JS::NonnullGCPtr<HTMLCollection> scripts();
     JS::NonnullGCPtr<HTML::HTMLAllCollection> all();
+
+    // https://drafts.csswg.org/css-font-loading/#font-source
+    JS::NonnullGCPtr<CSS::FontFaceSet> fonts();
+
+    void clear();
+    void capture_events();
+    void release_events();
 
     String const& source() const { return m_source; }
     void set_source(String source) { m_source = move(source); }
@@ -450,6 +474,9 @@ public:
     bool needs_full_style_update() const { return m_needs_full_style_update; }
     void set_needs_full_style_update(bool b) { m_needs_full_style_update = b; }
 
+    void set_needs_to_refresh_clip_state(bool b);
+    void set_needs_to_refresh_scroll_state(bool b);
+
     bool has_active_favicon() const { return m_active_favicon; }
     void check_favicon_after_loading_link_resource();
 
@@ -484,18 +511,20 @@ public:
 
     // https://html.spec.whatwg.org/multipage/dom.html#concept-document-policy-container
     HTML::PolicyContainer policy_container() const;
+    void set_policy_container(HTML::PolicyContainer);
 
     Vector<JS::Handle<HTML::Navigable>> descendant_navigables();
     Vector<JS::Handle<HTML::Navigable>> const descendant_navigables() const;
     Vector<JS::Handle<HTML::Navigable>> inclusive_descendant_navigables();
     Vector<JS::Handle<HTML::Navigable>> ancestor_navigables();
+    Vector<JS::Handle<HTML::Navigable>> const ancestor_navigables() const;
     Vector<JS::Handle<HTML::Navigable>> inclusive_ancestor_navigables();
     Vector<JS::Handle<HTML::Navigable>> document_tree_child_navigables();
 
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#destroy-a-document
     void destroy();
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#destroy-a-document-and-its-descendants
-    void destroy_a_document_and_its_descendants(JS::SafeFunction<void()> after_all_destruction = {});
+    void destroy_a_document_and_its_descendants(JS::GCPtr<JS::HeapFunction<void()>> after_all_destruction = {});
 
     // https://html.spec.whatwg.org/multipage/browsing-the-web.html#abort-a-document
     void abort();
@@ -505,7 +534,7 @@ public:
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#unload-a-document
     void unload(JS::GCPtr<Document> new_document = nullptr);
     // https://html.spec.whatwg.org/multipage/document-lifecycle.html#unload-a-document-and-its-descendants
-    void unload_a_document_and_its_descendants(JS::GCPtr<Document> new_document, JS::SafeFunction<void()> after_all_unloads = {});
+    void unload_a_document_and_its_descendants(JS::GCPtr<Document> new_document, JS::GCPtr<JS::HeapFunction<void()>> after_all_unloads = {});
 
     // https://html.spec.whatwg.org/multipage/dom.html#active-parser
     JS::GCPtr<HTML::HTMLParser> active_parser();
@@ -568,19 +597,23 @@ public:
     void restore_the_history_object_state(JS::NonnullGCPtr<HTML::SessionHistoryEntry> entry);
 
     JS::NonnullGCPtr<Animations::DocumentTimeline> timeline();
+    auto const& last_animation_frame_timestamp() const { return m_last_animation_frame_timestamp; }
 
     void associate_with_timeline(JS::NonnullGCPtr<Animations::AnimationTimeline>);
     void disassociate_with_timeline(JS::NonnullGCPtr<Animations::AnimationTimeline>);
 
     struct PendingAnimationEvent {
         JS::NonnullGCPtr<DOM::Event> event;
-        JS::NonnullGCPtr<Animations::Animation> target;
+        JS::NonnullGCPtr<Animations::Animation> animation;
+        JS::NonnullGCPtr<DOM::EventTarget> target;
         Optional<double> scheduled_event_time;
     };
     void append_pending_animation_event(PendingAnimationEvent const&);
     void update_animations_and_send_events(Optional<double> const& timestamp);
     void remove_replaced_animations();
     void ensure_animation_timer();
+
+    Vector<JS::NonnullGCPtr<Animations::Animation>> get_animations();
 
     bool ready_to_run_scripts() const { return m_ready_to_run_scripts; }
     void set_ready_to_run_scripts() { m_ready_to_run_scripts = true; }
@@ -638,9 +671,12 @@ public:
     // Does document represent an embedded svg img
     [[nodiscard]] bool is_decoded_svg() const;
 
+    Vector<JS::Handle<DOM::Range>> find_matching_text(String const&, CaseSensitivity);
+
 protected:
     virtual void initialize(JS::Realm&) override;
     virtual void visit_edges(Cell::Visitor&) override;
+    virtual void finalize() override;
 
     Document(JS::Realm&, URL::URL const&);
 
@@ -677,7 +713,7 @@ private:
 
     JS::GCPtr<Layout::Viewport> m_layout_root;
 
-    Optional<Color> m_link_color;
+    Optional<Color> m_normal_link_color;
     Optional<Color> m_active_link_color;
     Optional<Color> m_visited_link_color;
 
@@ -791,6 +827,9 @@ private:
     JS::GCPtr<HTMLCollection> m_scripts;
     JS::GCPtr<HTML::HTMLAllCollection> m_all;
 
+    // https://drafts.csswg.org/css-font-loading/#font-source
+    JS::GCPtr<CSS::FontFaceSet> m_fonts;
+
     // https://html.spec.whatwg.org/#completely-loaded-time
     Optional<AK::UnixDateTime> m_completely_loaded_time;
 
@@ -854,6 +893,7 @@ private:
 
     // https://www.w3.org/TR/web-animations-1/#document-default-document-timeline
     JS::GCPtr<Animations::DocumentTimeline> m_default_timeline;
+    Optional<double> m_last_animation_frame_timestamp;
 
     // https://www.w3.org/TR/web-animations-1/#pending-animation-event-queue
     Vector<PendingAnimationEvent> m_pending_animation_event_queue;

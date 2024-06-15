@@ -14,14 +14,13 @@ namespace Web::MathML {
 
 class MathMLElement : public DOM::Element
     , public HTML::GlobalEventHandlers {
-    WEB_PLATFORM_OBJECT(MathMLElement, Element);
+    WEB_PLATFORM_OBJECT(MathMLElement, DOM::Element);
     JS_DECLARE_ALLOCATOR(MathMLElement);
 
 public:
     virtual ~MathMLElement() override;
 
-    HTML::DOMStringMap* dataset() { return m_dataset.ptr(); }
-    HTML::DOMStringMap const* dataset() const { return m_dataset.ptr(); }
+    [[nodiscard]] JS::NonnullGCPtr<HTML::DOMStringMap> dataset();
 
     virtual Optional<ARIA::Role> default_role() const override;
 

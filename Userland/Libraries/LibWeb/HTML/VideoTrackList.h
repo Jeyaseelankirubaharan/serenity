@@ -19,10 +19,10 @@ class VideoTrackList final : public DOM::EventTarget {
     JS_DECLARE_ALLOCATOR(VideoTrackList);
 
 public:
-    ErrorOr<void> add_track(Badge<HTMLMediaElement>, JS::NonnullGCPtr<VideoTrack>);
+    void add_track(Badge<HTMLMediaElement>, JS::NonnullGCPtr<VideoTrack>);
     void remove_all_tracks(Badge<HTMLMediaElement>);
 
-    Span<JS::NonnullGCPtr<VideoTrack>> video_tracks(Badge<VideoTrack>) { return m_video_tracks; }
+    Span<JS::NonnullGCPtr<VideoTrack>> video_tracks() { return m_video_tracks; }
 
     // https://html.spec.whatwg.org/multipage/media.html#dom-videotracklist-length
     size_t length() const { return m_video_tracks.size(); }

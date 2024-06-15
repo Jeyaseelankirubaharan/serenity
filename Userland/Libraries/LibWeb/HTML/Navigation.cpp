@@ -83,14 +83,12 @@ void Navigation::initialize(JS::Realm& realm)
 void Navigation::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto& entry : m_entry_list)
-        visitor.visit(entry);
+    visitor.visit(m_entry_list);
     visitor.visit(m_transition);
     visitor.visit(m_ongoing_navigate_event);
     visitor.visit(m_ongoing_api_method_tracker);
     visitor.visit(m_upcoming_non_traverse_api_method_tracker);
-    for (auto& key_and_tracker : m_upcoming_traverse_api_method_trackers)
-        visitor.visit(key_and_tracker.value);
+    visitor.visit(m_upcoming_traverse_api_method_trackers);
 }
 
 // https://html.spec.whatwg.org/multipage/nav-history-apis.html#dom-navigation-entries
@@ -681,12 +679,12 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
 
             // 1. Queue a global task on the navigation and traversal task source given navigation's relevant global object
             //    to reject the finished promise for apiMethodTracker with an "InvalidStateError" DOMException.
-            queue_global_task(HTML::Task::Source::NavigationAndTraversal, relevant_global_object(*this), [this, api_method_tracker] {
+            queue_global_task(HTML::Task::Source::NavigationAndTraversal, relevant_global_object(*this), JS::create_heap_function(heap(), [this, api_method_tracker] {
                 auto& reject_realm = relevant_realm(*this);
                 TemporaryExecutionContext execution_context { relevant_settings_object(*this) };
                 WebIDL::reject_promise(reject_realm, api_method_tracker->finished_promise,
                     WebIDL::InvalidStateError::create(reject_realm, "Cannot traverse with stale session history entry"_fly_string));
-            });
+            }));
 
             // 2. Abort these steps.
             return;
@@ -714,20 +712,20 @@ WebIDL::ExceptionOr<NavigationResult> Navigation::perform_a_navigation_api_trave
         auto& realm = relevant_realm(*this);
         auto& global = relevant_global_object(*this);
         if (result == TraversableNavigable::HistoryStepResult::CanceledByBeforeUnload) {
-            queue_global_task(Task::Source::NavigationAndTraversal, global, [this, api_method_tracker, &realm] {
+            queue_global_task(Task::Source::NavigationAndTraversal, global, JS::create_heap_function(heap(), [this, api_method_tracker, &realm] {
                 TemporaryExecutionContext execution_context { relevant_settings_object(*this) };
                 reject_the_finished_promise(api_method_tracker, WebIDL::AbortError::create(realm, "Navigation cancelled by beforeunload"_fly_string));
-            });
+            }));
         }
 
         // 6. If result is "initiator-disallowed", then queue a global task on the navigation and traversal task source
         //    given navigation's relevant global object to reject the finished promise for apiMethodTracker with a
         //    new "SecurityError" DOMException created in navigation's relevant realm.
         if (result == TraversableNavigable::HistoryStepResult::InitiatorDisallowed) {
-            queue_global_task(Task::Source::NavigationAndTraversal, global, [this, api_method_tracker, &realm] {
+            queue_global_task(Task::Source::NavigationAndTraversal, global, JS::create_heap_function(heap(), [this, api_method_tracker, &realm] {
                 TemporaryExecutionContext execution_context { relevant_settings_object(*this) };
                 reject_the_finished_promise(api_method_tracker, WebIDL::SecurityError::create(realm, "Navigation disallowed from this origin"_fly_string));
-            });
+            }));
         }
     });
 
@@ -920,6 +918,10 @@ bool Navigation::inner_navigate_event_firing_algorithm(
     Optional<String> download_request_filename,
     Optional<SerializationRecord> classic_history_api_state)
 {
+    // NOTE: Specification assumes that ongoing navigation event is cancelled before dispatching next navigation event.
+    if (m_ongoing_navigate_event)
+        abort_the_ongoing_navigation();
+
     auto& realm = relevant_realm(*this);
 
     // 1. If navigation has entries and events disabled, then:
@@ -975,11 +977,11 @@ bool Navigation::inner_navigate_event_firing_algorithm(
     // 10. Let traverseCanBeCanceled be true if all of the following are true:
     //      - navigable is a top-level traversable;
     //      - destination's is same document is true; and
-    //      - either userInvolvement is not "browser UI", or navigation's relevant global object has transient activation.
+    //      - either userInvolvement is not "browser UI", or navigation's relevant global object has history-action activation.
     //     Otherwise, let it be false.
     bool const traverse_can_be_canceled = navigable->is_top_level_traversable()
         && destination->same_document()
-        && (user_involvement != UserNavigationInvolvement::BrowserUI || relevant_global_object.has_transient_activation());
+        && (user_involvement != UserNavigationInvolvement::BrowserUI || relevant_global_object.has_history_action_activation());
 
     // FIXME: Fix spec grammaro, extra 'the -> set'
     // 11. If either:
@@ -1068,7 +1070,9 @@ bool Navigation::inner_navigate_event_firing_algorithm(
 
     // 29. If dispatchResult is false:
     if (!dispatch_result) {
-        // FIXME: 1. If navigationType is "traverse", then consume history-action user activation.
+        // 1. If navigationType is "traverse", then consume history-action user activation given navigation's relevant global object.
+        if (navigation_type == Bindings::NavigationType::Traverse)
+            relevant_global_object.consume_history_action_user_activation();
 
         // 2. If event's abort controller's signal is not aborted, then abort the ongoing navigation given navigation.
         if (!event->abort_controller()->signal()->aborted())

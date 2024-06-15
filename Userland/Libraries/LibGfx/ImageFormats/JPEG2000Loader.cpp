@@ -15,6 +15,9 @@
 // Core coding system spec (.jp2 format): T-REC-T.800-201511-S!!PDF-E.pdf available here:
 // https://www.itu.int/rec/dologin_pub.asp?lang=e&id=T-REC-T.800-201511-S!!PDF-E&type=items
 
+// There is a useful example bitstream in the spec in:
+// J.10 An example of decoding showing intermediate
+
 // Extensions (.jpx format): T-REC-T.801-202106-S!!PDF-E.pdf available here:
 // https://handle.itu.int/11.1002/1000/14666-en?locatt=format:pdf&auth
 
@@ -26,9 +29,8 @@ namespace Gfx {
 // or in a JP2 file, which is a container format based on boxes similar to ISOBMFF.
 
 // This is the marker for the codestream version. We don't support this yet.
-// If we add support, add a second `"image/jp2"` line to MimeData.cpp for this magic number.
 // T.800 Annex A, Codestream syntax, A.2 Information in the marker segments and A.3 Construction of the codestream
-[[maybe_unused]] static constexpr u8 marker_id_string[] = { 0xFF, 0x4F, 0xFF, 0x51 };
+static constexpr u8 marker_id_string[] = { 0xFF, 0x4F, 0xFF, 0x51 };
 
 // This is the marker for the box version.
 // T.800 Annex I, JP2 file format syntax, I.5.1 JPEG 2000 Signature box
@@ -181,33 +183,8 @@ static ErrorOr<ImageAndTileSize> read_image_and_tile_size(ReadonlyBytes data)
     return siz;
 }
 
-// A.6.1 Coding style default (COD)
-struct CodingStyleDefault {
-    // Table A.13 – Coding style parameter values for the Scod parameter
-    bool has_explicit_precinct_size { false };
-    bool may_use_SOP_marker { false };
-    bool may_use_EPH_marker { false };
-
-    // Table A.16 – Progression order for the SGcod, SPcoc, and Ppoc parameters
-    enum ProgressionOrder {
-        LayerResolutionComponentPosition = 0,
-        ResolutionLayerComponentPosition = 1,
-        ResolutionPositionComponentLayer = 2,
-        PositionComponentResolutionLayer = 3,
-        ComponentPositionResolutionLayer = 4,
-    };
-
-    // Table A.17 – Multiple component transformation for the SGcod parameters
-    enum MultipleComponentTransformationType {
-        None = 0,
-        MultipleComponentTransformationUsed = 1, // See Annex G
-    };
-
-    // Table A.14 – Coding style parameter values of the SGcod parameter
-    ProgressionOrder progression_order { LayerResolutionComponentPosition };
-    u16 number_of_layers { 0 };
-    MultipleComponentTransformationType multiple_component_transformation_type { None };
-
+// Data shared by COD and COC marker segments
+struct CodingStyleParameters {
     // Table A.20 – Transformation for the SPcod and SPcoc parameters
     enum Transformation {
         Irreversible_9_7_Filter = 0,
@@ -239,6 +216,90 @@ struct CodingStyleDefault {
     Vector<PrecinctSize> precinct_sizes;
 };
 
+static ErrorOr<CodingStyleParameters> read_coding_style_parameters(ReadonlyBytes data, StringView name, bool has_explicit_precinct_size)
+{
+    FixedMemoryStream stream { data };
+
+    CodingStyleParameters parameters;
+
+    parameters.number_of_decomposition_levels = TRY(stream.read_value<u8>());
+    if (parameters.number_of_decomposition_levels > 32)
+        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid number of decomposition levels");
+
+    // Table A.18 – Width or height exponent of the code-blocks for the SPcod and SPcoc parameters
+    u8 xcb = (TRY(stream.read_value<u8>()) & 0xF) + 2;
+    u8 ycb = (TRY(stream.read_value<u8>()) & 0xF) + 2;
+    if (xcb > 10 || ycb > 10 || xcb + ycb > 12)
+        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid code block size");
+    parameters.code_block_width_exponent = xcb;
+    parameters.code_block_height_exponent = ycb;
+
+    parameters.code_block_style = TRY(stream.read_value<u8>());
+
+    u8 transformation = TRY(stream.read_value<u8>());
+    if (transformation > 1)
+        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid transformation");
+    parameters.transformation = static_cast<CodingStyleParameters::Transformation>(transformation);
+
+    if (has_explicit_precinct_size) {
+        for (size_t i = 0; i < parameters.number_of_decomposition_levels + 1u; ++i) {
+            u8 b = TRY(stream.read_value<u8>());
+
+            // Table A.21 – Precinct width and height for the SPcod and SPcoc parameters
+            CodingStyleParameters::PrecinctSize precinct_size;
+            precinct_size.PPx = b & 0xF;
+            precinct_size.PPy = b >> 4;
+            if ((precinct_size.PPx == 0 || precinct_size.PPy == 0) && i > 0)
+                return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid precinct size");
+            parameters.precinct_sizes.append(precinct_size);
+        }
+    } else {
+        for (size_t i = 0; i < parameters.number_of_decomposition_levels + 1u; ++i)
+            parameters.precinct_sizes.append({ 15, 15 });
+    }
+
+    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: {} marker segment: number_of_decomposition_levels={}, code_block_width_exponent={}, code_block_height_exponent={}", name, parameters.number_of_decomposition_levels, parameters.code_block_width_exponent, parameters.code_block_height_exponent);
+    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: {} marker segment: code_block_style={}, transformation={}", name, parameters.code_block_style, (int)parameters.transformation);
+    if (has_explicit_precinct_size) {
+        dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: {} marker segment: {} explicit precinct sizes:", name, parameters.precinct_sizes.size());
+        for (auto [i, precinct_size] : enumerate(parameters.precinct_sizes))
+            dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: {} marker segment: precinct_size[{}]: PPx={}, PPy={}", name, i, precinct_size.PPx, precinct_size.PPy);
+    }
+
+    return parameters;
+}
+
+// A.6.1 Coding style default (COD)
+struct CodingStyleDefault {
+    // Table A.13 – Coding style parameter values for the Scod parameter
+    bool has_explicit_precinct_size { false };
+    bool may_use_SOP_marker { false };
+    bool may_use_EPH_marker { false };
+
+    // Table A.16 – Progression order for the SGcod, SPcoc, and Ppoc parameters
+    // B.12 Progression order
+    enum ProgressionOrder {
+        LayerResolutionComponentPosition = 0,
+        ResolutionLayerComponentPosition = 1,
+        ResolutionPositionComponentLayer = 2,
+        PositionComponentResolutionLayer = 3,
+        ComponentPositionResolutionLayer = 4,
+    };
+
+    // Table A.17 – Multiple component transformation for the SGcod parameters
+    enum MultipleComponentTransformationType {
+        None = 0,
+        MultipleComponentTransformationUsed = 1, // See Annex G
+    };
+
+    // Table A.14 – Coding style parameter values of the SGcod parameter
+    ProgressionOrder progression_order { LayerResolutionComponentPosition };
+    u16 number_of_layers { 0 };
+    MultipleComponentTransformationType multiple_component_transformation_type { None };
+
+    CodingStyleParameters parameters;
+};
+
 static ErrorOr<CodingStyleDefault> read_coding_style_default(ReadonlyBytes data)
 {
     FixedMemoryStream stream { data };
@@ -265,52 +326,42 @@ static ErrorOr<CodingStyleDefault> read_coding_style_default(ReadonlyBytes data)
         return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid multiple component transformation type");
     cod.multiple_component_transformation_type = static_cast<CodingStyleDefault::MultipleComponentTransformationType>(multiple_component_transformation_type);
 
-    cod.number_of_decomposition_levels = TRY(stream.read_value<u8>());
-    if (cod.number_of_decomposition_levels > 32)
-        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid number of decomposition levels");
+    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: has_explicit_precinct_size={}, may_use_SOP_marker={}, may_use_EPH_marker={}", cod.has_explicit_precinct_size, cod.may_use_SOP_marker, cod.may_use_EPH_marker);
+    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: progression_order={}, number_of_layers={}, multiple_component_transformation_type={}", (int)cod.progression_order, cod.number_of_layers, (int)cod.multiple_component_transformation_type);
 
-    // Table A.18 – Width or height exponent of the code-blocks for the SPcod and SPcoc parameters
-    u8 xcb = (TRY(stream.read_value<u8>()) & 0xF) + 2;
-    u8 ycb = (TRY(stream.read_value<u8>()) & 0xF) + 2;
-    if (xcb > 10 || ycb > 10 || xcb + ycb > 12)
-        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid code block size");
-    cod.code_block_width_exponent = xcb;
-    cod.code_block_height_exponent = ycb;
-
-    cod.code_block_style = TRY(stream.read_value<u8>());
-
-    u8 transformation = TRY(stream.read_value<u8>());
-    if (transformation > 1)
-        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid transformation");
-    cod.transformation = static_cast<CodingStyleDefault::Transformation>(transformation);
-
-    if (cod.has_explicit_precinct_size) {
-        for (size_t i = 0; i < cod.number_of_decomposition_levels + 1u; ++i) {
-            u8 b = TRY(stream.read_value<u8>());
-
-            // Table A.21 – Precinct width and height for the SPcod and SPcoc parameters
-            CodingStyleDefault::PrecinctSize precinct_size;
-            precinct_size.PPx = b & 0xF;
-            precinct_size.PPy = b >> 4;
-            if ((precinct_size.PPx == 0 || precinct_size.PPy == 0) && i > 0)
-                return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Invalid precinct size");
-            cod.precinct_sizes.append(precinct_size);
-        }
-    } else {
-        for (size_t i = 0; i < cod.number_of_decomposition_levels + 1u; ++i)
-            cod.precinct_sizes.append({ 15, 15 });
-    }
-
-    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: has_explicit_precinct_size={}, may_use_SOP_marker={}, may_use_EPH_marker={}, progression_order={}, number_of_layers={}", cod.has_explicit_precinct_size, cod.may_use_SOP_marker, cod.may_use_EPH_marker, (int)cod.progression_order, cod.number_of_layers);
-    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: multiple_component_transformation_type={}, number_of_decomposition_levels={}, code_block_width_exponent={}, code_block_height_exponent={}", (int)cod.multiple_component_transformation_type, cod.number_of_decomposition_levels, cod.code_block_width_exponent, cod.code_block_height_exponent);
-    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: code_block_style={}, transformation={}", cod.code_block_style, (int)cod.transformation);
-    if (cod.has_explicit_precinct_size) {
-        dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: {} explicit precinct sizes:", cod.precinct_sizes.size());
-        for (auto [i, precinct_size] : enumerate(cod.precinct_sizes))
-            dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COD marker segment: precinct_size[{}]: PPx={}, PPy={}", i, precinct_size.PPx, precinct_size.PPy);
-    }
+    cod.parameters = TRY(read_coding_style_parameters(data.slice(stream.offset()), "COD"sv, cod.has_explicit_precinct_size));
 
     return cod;
+}
+
+// A.6.2 Coding style component (COC)
+struct CodingStyleComponent {
+    u16 component_index { 0 }; // "Ccoc" in spec.
+
+    // Table A.23 – Coding style parameter values for the Scoc parameter
+    bool has_explicit_precinct_size { false }; // "Scoc" in spec.
+
+    CodingStyleParameters parameters;
+};
+
+static ErrorOr<CodingStyleComponent> read_coding_style_component(ReadonlyBytes data, size_t number_of_components)
+{
+    FixedMemoryStream stream { data };
+
+    // Table A.22 – Coding style component parameter values
+    CodingStyleComponent coc;
+    if (number_of_components < 257)
+        coc.component_index = TRY(stream.read_value<u8>());
+    else
+        coc.component_index = TRY(stream.read_value<BigEndian<u16>>());
+
+    u8 Scoc = TRY(stream.read_value<u8>());
+    coc.has_explicit_precinct_size = Scoc & 1;
+
+    dbgln_if(JPEG2000_DEBUG, "JPEG2000ImageDecoderPlugin: COC marker segment: component_index={}", coc.component_index);
+    coc.parameters = TRY(read_coding_style_parameters(data.slice(TRY(stream.tell())), "COC"sv, coc.has_explicit_precinct_size));
+
+    return coc;
 }
 
 // A.6.4 Quantization default (QCD)
@@ -457,6 +508,8 @@ struct TilePartData {
 };
 
 struct TileData {
+    Optional<CodingStyleDefault> cod;
+    Vector<CodingStyleComponent> cocs;
     Optional<QuantizationDefault> qcd;
     Vector<QuantizationComponent> qccs;
     Vector<TilePartData> tile_parts;
@@ -480,6 +533,7 @@ struct JPEG2000LoadingContext {
     // Data from marker segments:
     ImageAndTileSize siz;
     CodingStyleDefault cod;
+    Vector<CodingStyleComponent> cocs;
     QuantizationDefault qcd;
     Vector<QuantizationComponent> qccs;
     Vector<Comment> coms;
@@ -565,6 +619,8 @@ static ErrorOr<void> parse_codestream_main_header(JPEG2000LoadingContext& contex
                     return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Multiple COD markers in main header");
                 context.cod = TRY(read_coding_style_default(marker.data.value()));
                 saw_COD_marker = true;
+            } else if (marker.marker == J2K_COC) {
+                context.cocs.append(TRY(read_coding_style_component(marker.data.value(), context.siz.components.size())));
             } else if (marker.marker == J2K_QCD) {
                 if (saw_QCD_marker)
                     return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Multiple QCD markers in main header");
@@ -595,7 +651,8 @@ static ErrorOr<void> parse_codestream_main_header(JPEG2000LoadingContext& contex
                 [](Empty) -> size_t { VERIFY_NOT_REACHED(); },
                 [](Vector<QuantizationDefault::ReversibleStepSize> const& step_sizes) { return step_sizes.size(); },
                 [](Vector<QuantizationDefault::IrreversibleStepSize> const& step_sizes) { return step_sizes.size(); });
-            if (context.qcd.quantization_style != QuantizationDefault::ScalarDerived && step_sizes_count < context.cod.number_of_decomposition_levels * 3u + 1u)
+            // FIXME: What if number_of_decomposition_levels is in context.cocs and varies by component?
+            if (context.qcd.quantization_style != QuantizationDefault::ScalarDerived && step_sizes_count < context.cod.parameters.number_of_decomposition_levels * 3u + 1u)
                 return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Not enough step sizes for number of decomposition levels");
 
             return {};
@@ -650,7 +707,13 @@ static ErrorOr<void> parse_codestream_tile_header(JPEG2000LoadingContext& contex
         case J2K_PLT:
         case J2K_COM: {
             auto marker = TRY(read_marker_at_cursor(context));
-            if (marker.marker == J2K_QCD) {
+            if (marker.marker == J2K_COD) {
+                if (tile.cod.has_value())
+                    return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Multiple COD markers in tile header");
+                tile.cod = TRY(read_coding_style_default(marker.data.value()));
+            } else if (marker.marker == J2K_COC) {
+                tile.cocs.append(TRY(read_coding_style_component(marker.data.value(), context.siz.components.size())));
+            } else if (marker.marker == J2K_QCD) {
                 if (tile.qcd.has_value())
                     return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Multiple QCD markers in tile header");
                 tile.qcd = TRY(read_quantization_default(marker.data.value()));
@@ -713,6 +776,13 @@ static ErrorOr<void> decode_jpeg2000_header(JPEG2000LoadingContext& context, Rea
 {
     if (!JPEG2000ImageDecoderPlugin::sniff(data))
         return Error::from_string_literal("JPEG2000LoadingContext: Invalid JPEG2000 header");
+
+    if (data.starts_with(marker_id_string)) {
+        context.codestream_data = data;
+        TRY(parse_codestream_main_header(context));
+        context.size = { context.siz.width, context.siz.height };
+        return {};
+    }
 
     auto reader = TRY(Gfx::ISOBMFF::Reader::create(TRY(try_make<FixedMemoryStream>(data))));
     context.boxes = TRY(reader.read_entire_file());
@@ -801,12 +871,116 @@ static ErrorOr<void> decode_jpeg2000_header(JPEG2000LoadingContext& context, Rea
 
     TRY(parse_codestream_main_header(context));
 
+    auto size_from_siz = IntSize { context.siz.width, context.siz.height };
+    if (size_from_siz != context.size) {
+        // FIXME: If this is common, warn and use size from SIZ marker.
+        dbgln("JPEG2000ImageDecoderPlugin: Image size from SIZ marker ({}) does not match image size from JP2 header ({})", size_from_siz, context.size);
+        return Error::from_string_literal("JPEG2000ImageDecoderPlugin: Image size from SIZ marker does not match image size from JP2 header");
+    }
+
     return {};
+}
+
+namespace JPEG2000 {
+
+// Tag trees are used to store the code-block inclusion bits and the zero bit-plane information.
+// B.10.2 Tag trees
+// "At every node of this tree the minimum integer of the (up to four) nodes below it is recorded. [...]
+//  Level 0 is the lowest level of the tag tree; it contains the top node. [...]
+//  Each node has a [...] current value, [...] initialized to zero. A 0 bit in the tag tree means that the minimum
+//  (or the value in the case of the highest level) is larger than the current value and a 1 bit means that the minimum
+//  (or the value in the case of the highest level) is equal to the current value.
+//  For each contiguous 0 bit in the tag tree the current value is incremented by one.
+//  Nodes at higher levels cannot be coded until lower level node values are fixed (i.e, a 1 bit is coded). [...]
+//  Only the information needed for the current code-block is stored at the current point in the packet header."
+// The example in Figure B.13 / Table B.5 is useful to understand what exactly "only the information needed" means.
+struct TagTreeNode {
+    u32 value { 0 };
+    enum State {
+        Pending,
+        Final,
+    };
+    State state { Pending };
+    Array<OwnPtr<TagTreeNode>, 4> children {};
+    u32 level { 0 }; // 0 for leaf nodes, 1 for the next level, etc.
+
+    bool is_leaf() const { return level == 0; }
+
+    ErrorOr<u32> read_value(u32 x, u32 y, Function<ErrorOr<bool>()> const& read_bit, u32 start_value, Optional<u32> stop_at = {})
+    {
+        value = max(value, start_value);
+        while (true) {
+            if (stop_at.has_value() && value == stop_at.value())
+                return value;
+
+            if (state == Final) {
+                if (is_leaf())
+                    return value;
+                u32 x_index = (x >> (level - 1)) & 1;
+                u32 y_index = (y >> (level - 1)) & 1;
+                return children[y_index * 2 + x_index]->read_value(x, y, read_bit, value, stop_at);
+            }
+
+            bool bit = TRY(read_bit());
+            if (!bit)
+                value++;
+            else
+                state = Final;
+        }
+    }
+
+    static ErrorOr<NonnullOwnPtr<TagTreeNode>> create(u32 x_count, u32 y_count, u32 level)
+    {
+        VERIFY(x_count > 0);
+        VERIFY(y_count > 0);
+
+        auto node = TRY(try_make<TagTreeNode>());
+        node->level = level;
+        if (node->is_leaf()) {
+            VERIFY(x_count == 1);
+            VERIFY(y_count == 1);
+            return node;
+        }
+
+        u32 top_left_x_child_count = min(x_count, 1u << (max(level, 1) - 1));
+        u32 top_left_y_child_count = min(y_count, 1u << (max(level, 1) - 1));
+        for (u32 y = 0; y < 2; ++y) {
+            for (u32 x = 0; x < 2; ++x) {
+                u32 child_x_count = x == 1 ? x_count - top_left_x_child_count : top_left_x_child_count;
+                u32 child_y_count = y == 1 ? y_count - top_left_y_child_count : top_left_y_child_count;
+                if (child_x_count == 0 || child_y_count == 0)
+                    continue;
+                node->children[y * 2 + x] = TRY(create(child_x_count, child_y_count, level - 1));
+            }
+        }
+        return node;
+    }
+};
+
+TagTree::TagTree(NonnullOwnPtr<TagTreeNode> root)
+    : m_root(move(root))
+{
+}
+
+TagTree::TagTree(TagTree&&) = default;
+TagTree::~TagTree() = default;
+
+ErrorOr<TagTree> TagTree::create(u32 x_count, u32 y_count)
+{
+    auto level = ceil(log2(max(x_count, y_count)));
+    return TagTree { TRY(TagTreeNode::create(x_count, y_count, level)) };
+}
+
+ErrorOr<u32> TagTree::read_value(u32 x, u32 y, Function<ErrorOr<bool>()> const& read_bit, Optional<u32> stop_at) const
+{
+    return m_root->read_value(x, y, read_bit, m_root->value, stop_at);
+}
+
 }
 
 bool JPEG2000ImageDecoderPlugin::sniff(ReadonlyBytes data)
 {
-    return data.starts_with(jp2_id_string);
+    return data.starts_with(jp2_id_string) || data.starts_with(marker_id_string);
 }
 
 JPEG2000ImageDecoderPlugin::JPEG2000ImageDecoderPlugin()

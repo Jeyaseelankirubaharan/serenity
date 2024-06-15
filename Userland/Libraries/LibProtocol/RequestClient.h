@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/HashMap.h>
+#include <LibHTTP/HeaderMap.h>
 #include <LibIPC/ConnectionToServer.h>
 #include <LibProtocol/WebSocket.h>
 #include <LibWebSocket/WebSocket.h>
@@ -25,8 +26,7 @@ class RequestClient final
 public:
     explicit RequestClient(NonnullOwnPtr<Core::LocalSocket>);
 
-    template<typename RequestHashMapTraits = Traits<ByteString>>
-    RefPtr<Request> start_request(ByteString const& method, URL::URL const&, HashMap<ByteString, ByteString, RequestHashMapTraits> const& request_headers = {}, ReadonlyBytes request_body = {}, Core::ProxyData const& = {});
+    RefPtr<Request> start_request(ByteString const& method, URL::URL const&, HTTP::HeaderMap const& request_headers = {}, ReadonlyBytes request_body = {}, Core::ProxyData const& = {});
 
     RefPtr<WebSocket> websocket_connect(const URL::URL&, ByteString const& origin = {}, Vector<ByteString> const& protocols = {}, Vector<ByteString> const& extensions = {}, HashMap<ByteString, ByteString> const& request_headers = {});
 
@@ -40,7 +40,7 @@ private:
     virtual void request_progress(i32, Optional<u64> const&, u64) override;
     virtual void request_finished(i32, bool, u64) override;
     virtual void certificate_requested(i32) override;
-    virtual void headers_became_available(i32, HashMap<ByteString, ByteString, CaseInsensitiveStringTraits> const&, Optional<u32> const&) override;
+    virtual void headers_became_available(i32, HTTP::HeaderMap const&, Optional<u32> const&) override;
 
     virtual void websocket_connected(i32) override;
     virtual void websocket_received(i32, bool, ByteBuffer const&) override;

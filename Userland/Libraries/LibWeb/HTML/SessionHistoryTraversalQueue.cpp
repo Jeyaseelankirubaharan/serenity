@@ -37,15 +37,13 @@ SessionHistoryTraversalQueue::SessionHistoryTraversalQueue()
             entry->execute_steps();
             m_is_task_running = false;
         }
-    }).release_value_but_fixme_should_propagate_errors();
+    });
 }
 
 void SessionHistoryTraversalQueue::visit_edges(JS::Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
-    for (auto const& entry : m_queue) {
-        visitor.visit(entry);
-    }
+    visitor.visit(m_queue);
 }
 
 void SessionHistoryTraversalQueue::append(Function<void()> steps)

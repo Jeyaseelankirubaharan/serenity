@@ -623,6 +623,11 @@ void BlockFormattingContext::layout_block_level_box(Box const& box, BlockContain
 
     auto independent_formatting_context = create_independent_formatting_context_if_needed(m_state, box);
 
+    // NOTE: It is possible to encounter SVGMaskBox nodes while doing layout of formatting context established by <foreignObject> with a mask.
+    //       We should skip and let SVGFormattingContext take care of them.
+    if (box.is_svg_mask_box())
+        return;
+
     if (!independent_formatting_context && !is<BlockContainer>(box)) {
         dbgln("FIXME: Block-level box is not BlockContainer but does not create formatting context: {}", box.debug_description());
         return;
@@ -1210,6 +1215,7 @@ CSSPixels BlockFormattingContext::greatest_child_width(Box const& box) const
         box.for_each_child_of_type<Box>([&](Box const& child) {
             if (!child.is_absolutely_positioned())
                 max_width = max(max_width, m_state.get(child).margin_box_width());
+            return IterationDecision::Continue;
         });
     }
     return max_width;

@@ -7,6 +7,7 @@
 #include <LibCore/Timer.h>
 #include <LibGfx/Bitmap.h>
 #include <LibWeb/ARIA/Roles.h>
+#include <LibWeb/Bindings/HTMLImageElementPrototype.h>
 #include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
@@ -77,13 +78,7 @@ void HTMLImageElement::visit_edges(Cell::Visitor& visitor)
 void HTMLImageElement::apply_presentational_hints(CSS::StyleProperties& style) const
 {
     for_each_attribute([&](auto& name, auto& value) {
-        if (name == HTML::AttributeNames::width) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Width, parsed_value.release_nonnull());
-        } else if (name == HTML::AttributeNames::height) {
-            if (auto parsed_value = parse_dimension_value(value))
-                style.set_property(CSS::PropertyID::Height, parsed_value.release_nonnull());
-        } else if (name == HTML::AttributeNames::hspace) {
+        if (name == HTML::AttributeNames::hspace) {
             if (auto parsed_value = parse_dimension_value(value)) {
                 style.set_property(CSS::PropertyID::MarginLeft, *parsed_value);
                 style.set_property(CSS::PropertyID::MarginRight, *parsed_value);
@@ -274,6 +269,13 @@ bool HTMLImageElement::complete() const
     return false;
 }
 
+// https://html.spec.whatwg.org/multipage/embedded-content.html#dom-img-currentsrc
+String HTMLImageElement::current_src() const
+{
+    // The currentSrc IDL attribute must return the img element's current request's current URL.
+    return MUST(m_current_request->current_url().to_string());
+}
+
 Optional<ARIA::Role> HTMLImageElement::default_role() const
 {
     // https://www.w3.org/TR/html-aria/#el-img
@@ -298,7 +300,7 @@ bool HTMLImageElement::uses_srcset_or_picture() const
 struct BatchingDispatcher {
 public:
     BatchingDispatcher()
-        : m_timer(Core::Timer::create_single_shot(1, [this] { process(); }).release_value_but_fixme_should_propagate_errors())
+        : m_timer(Core::Timer::create_single_shot(1, [this] { process(); }))
     {
     }
 
@@ -428,7 +430,7 @@ ErrorOr<void> HTMLImageElement::update_the_image_data(bool restart_animations, b
     }
 after_step_7:
     // 8. Queue a microtask to perform the rest of this algorithm, allowing the task that invoked this algorithm to continue.
-    queue_a_microtask(&document(), [this, restart_animations, maybe_omit_events, previous_url]() mutable {
+    queue_a_microtask(&document(), JS::create_heap_function(this->heap(), [this, restart_animations, maybe_omit_events, previous_url]() mutable {
         // FIXME: 9. If another instance of this algorithm for this img element was started after this instance
         //           (even if it aborted and is no longer running), then return.
 
@@ -561,7 +563,8 @@ after_step_7:
         // 21. Set request's referrer policy to the current state of the element's referrerpolicy attribute.
         request->set_referrer_policy(ReferrerPolicy::from_string(get_attribute_value(HTML::AttributeNames::referrerpolicy)).value_or(ReferrerPolicy::ReferrerPolicy::EmptyString));
 
-        // FIXME: 22. Set request's priority to the current state of the element's fetchpriority attribute.
+        // 22. Set request's priority to the current state of the element's fetchpriority attribute.
+        request->set_priority(Fetch::Infrastructure::request_priority_from_string(get_attribute_value(HTML::AttributeNames::fetchpriority)).value_or(Fetch::Infrastructure::Request::Priority::Auto));
 
         // 24. If the will lazy load element steps given the img return true, then:
         if (will_lazy_load_element()) {
@@ -578,7 +581,7 @@ after_step_7:
         }
 
         image_request->fetch_image(realm(), request);
-    });
+    }));
     return {};
 }
 
@@ -869,6 +872,7 @@ static void update_the_source_set(DOM::Element& element)
         elements.clear();
         element.parent()->for_each_child_of_type<DOM::Element>([&](auto& child) {
             elements.append(&child);
+            return IterationDecision::Continue;
         });
     }
 

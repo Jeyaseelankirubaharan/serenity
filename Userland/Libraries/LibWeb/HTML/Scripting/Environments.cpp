@@ -19,6 +19,14 @@
 
 namespace Web::HTML {
 
+Environment::~Environment() = default;
+
+void Environment::visit_edges(Cell::Visitor& visitor)
+{
+    Base::visit_edges(visitor);
+    visitor.visit(target_browsing_context);
+}
+
 EnvironmentSettingsObject::EnvironmentSettingsObject(NonnullOwnPtr<JS::ExecutionContext> realm_execution_context)
     : m_realm_execution_context(move(realm_execution_context))
 {
@@ -43,7 +51,6 @@ void EnvironmentSettingsObject::visit_edges(Cell::Visitor& visitor)
 {
     Base::visit_edges(visitor);
     visitor.visit(m_responsible_event_loop);
-    visitor.visit(target_browsing_context);
     visitor.visit(m_module_map);
     visitor.ignore(m_outstanding_rejected_promises_weak_set);
     m_realm_execution_context->visit_edges(visitor);
@@ -239,7 +246,7 @@ void EnvironmentSettingsObject::notify_about_rejected_promises(Badge<EventLoop>)
     auto& global = verify_cast<DOM::EventTarget>(global_object());
 
     // 5. Queue a global task on the DOM manipulation task source given global to run the following substep:
-    queue_global_task(Task::Source::DOMManipulation, global, [this, &global, list = move(list)] {
+    queue_global_task(Task::Source::DOMManipulation, global, JS::create_heap_function(heap(), [this, &global, list = move(list)] {
         auto& realm = global.realm();
 
         // 1. For each promise p in list:
@@ -277,7 +284,7 @@ void EnvironmentSettingsObject::notify_about_rejected_promises(Badge<EventLoop>)
             if (not_handled)
                 HTML::report_exception_to_console(promise->result(), realm, ErrorInPromise::Yes);
         }
-    });
+    }));
 }
 
 // https://html.spec.whatwg.org/multipage/webappapis.html#concept-environment-script

@@ -69,21 +69,20 @@ public:
     void close_top_level_traversable();
     void destroy_top_level_traversable();
 
-    void append_session_history_traversal_steps(Function<void()> steps)
+    void append_session_history_traversal_steps(ESCAPING Function<void()> steps)
     {
         m_session_history_traversal_queue->append(move(steps));
     }
 
-    void append_session_history_synchronous_navigation_steps(JS::NonnullGCPtr<Navigable> target_navigable, Function<void()> steps)
+    void append_session_history_synchronous_navigation_steps(JS::NonnullGCPtr<Navigable> target_navigable, ESCAPING Function<void()> steps)
     {
         m_session_history_traversal_queue->append_sync(move(steps), target_navigable);
     }
 
-    Page& page() { return m_page; }
-    Page const& page() const { return m_page; }
-
     String window_handle() const { return m_window_handle; }
     void set_window_handle(String window_handle) { m_window_handle = move(window_handle); }
+
+    [[nodiscard]] JS::GCPtr<DOM::Node> currently_focused_area();
 
 private:
     TraversableNavigable(JS::NonnullGCPtr<Page>);
@@ -102,6 +101,8 @@ private:
 
     Vector<JS::NonnullGCPtr<SessionHistoryEntry>> get_session_history_entries_for_the_navigation_api(JS::NonnullGCPtr<Navigable>, int);
 
+    [[nodiscard]] bool can_go_forward() const;
+
     // https://html.spec.whatwg.org/multipage/document-sequences.html#tn-current-session-history-step
     int m_current_session_history_step { 0 };
 
@@ -117,8 +118,6 @@ private:
     VisibilityState m_system_visibility_state { VisibilityState::Visible };
 
     JS::NonnullGCPtr<SessionHistoryTraversalQueue> m_session_history_traversal_queue;
-
-    JS::NonnullGCPtr<Page> m_page;
 
     String m_window_handle;
 };

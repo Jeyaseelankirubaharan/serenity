@@ -5,6 +5,7 @@ source_set("Painting") {
     "//Userland/",  # For LibGfx needing LibGUI needing WindowServer types
   ]
   sources = [
+    "AffineCommandExecutorCPU.cpp",
     "AudioPaintable.cpp",
     "BackgroundPainting.cpp",
     "BorderPainting.cpp",
@@ -14,6 +15,7 @@ source_set("Painting") {
     "ButtonPaintable.cpp",
     "CanvasPaintable.cpp",
     "CheckBoxPaintable.cpp",
+    "ClippableAndScrollable.cpp",
     "Command.cpp",
     "CommandExecutorCPU.cpp",
     "CommandList.cpp",
@@ -32,8 +34,10 @@ source_set("Painting") {
     "RadioButtonPaintable.cpp",
     "RecordingPainter.cpp",
     "SVGClipPaintable.cpp",
+    "SVGForeignObjectPaintable.cpp",
     "SVGGraphicsPaintable.cpp",
     "SVGMaskPaintable.cpp",
+    "SVGMaskable.cpp",
     "SVGPaintable.cpp",
     "SVGPathPaintable.cpp",
     "SVGSVGPaintable.cpp",
